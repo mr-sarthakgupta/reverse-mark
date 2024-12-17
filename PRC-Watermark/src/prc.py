@@ -160,6 +160,7 @@ def Decode(decoding_key, posteriors, print_progress=False, max_bp_iter=None):
     # Apply the belief-propagation decoder.
     if print_progress:
         print("Running belief propagation...")
+    parity_check_matrix = parity_check_matrix.astype(np.int8)
     bpd = bp_decoder(parity_check_matrix, channel_probs=channel_probs, max_iter=max_bp_iter, bp_method="product_sum")
     x_decoded = bpd.decode(x_recovered)
 
@@ -180,8 +181,10 @@ def Decode(decoding_key, posteriors, print_progress=False, max_bp_iter=None):
     # Solve the system.
     if print_progress:
         print("Solving linear system...")
-    recovered_string = np.linalg.solve(ordered_generator_matrix[top_invertible_rows], GF(ordered_x_decoded[top_invertible_rows]))
-
+    # ordered_x_decoded_mat = np.expand_dims(ordered_x_decoded[top_invertible_rows], axis=1).astype(np.int8)
+    ordered_x_decoded_mat = ordered_x_decoded[top_invertible_rows].astype(np.int8)
+    # ordered_x_decoded_mat.astype(np.int8)
+    recovered_string = np.linalg.solve(ordered_generator_matrix[top_invertible_rows], GF(ordered_x_decoded_mat))
     if not (recovered_string[:len(test_bits)] == test_bits).all():
         return None
     return np.array(recovered_string[len(test_bits) + g:])

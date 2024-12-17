@@ -26,7 +26,7 @@ parser.add_argument('--test_path', type=str, default='original_images')
 args = parser.parse_args()
 print(args)
 
-hf_cache_dir = '/home/xuandong/mnt/hf_models'
+hf_cache_dir = '/scratch/vidit_a_mfs.iitr/hf_cache'
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 n = 4 * 64 * 64  # the length of a PRC codeword
 method = args.method
@@ -48,7 +48,8 @@ cur_inv_order = 0
 var = 1.5
 combined_results = []
 for i in tqdm(range(test_num)):
-    img = Image.open(f'results/{exp_id}/{args.test_path}/{i}.png')
+    path = f'results/{args.test_path}/original_images/{i}.png'
+    img = Image.open(path)
     reversed_latents = exact_inversion(img,
                                        prompt='',
                                        test_num_inference_steps=args.inf_steps,

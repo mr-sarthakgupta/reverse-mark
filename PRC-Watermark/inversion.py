@@ -8,7 +8,7 @@ from src.optim_utils import set_random_seed, transform_img, get_dataset
 def stable_diffusion_pipe(
         solver_order=1,
         model_id='stabilityai/stable-diffusion-2-1-base',
-        cache_dir='/home/xuandong/mnt/hf_models',
+        cache_dir='/scratch/vidit_a_mfs.iitr/hf_cache',
 ):
     # load stable diffusion pipeline
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -126,7 +126,7 @@ def exact_inversion(
 
     # prompt to text embeddings
     text_embeddings_tuple = pipe.encode_prompt(
-        prompt, 'cuda', 1, guidance_scale > 1.0, None
+        prompt, 'cuda' if torch.cuda.is_available() else 'cpu', 1, guidance_scale > 1.0, None
     )
     text_embeddings = torch.cat([text_embeddings_tuple[1], text_embeddings_tuple[0]])
 

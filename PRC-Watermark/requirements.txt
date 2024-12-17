@@ -1,15 +1,9 @@
-torch
-# torch==2.1.0
-# transformers==4.29.2
-transformers
-# diffusers==0.21.4
-diffusers
-# torchvision==0.16.0
-torchvision
-# numpy==1.26.0
-numpy
+torch==2.1.0
+transformers==4.29.2
+diffusers==0.21.4
+torchvision==0.16.0
+numpy==1.26.0
 datasets
-compressai
 scikit-image
 opencv-python
 pycryptodome
