@@ -1,4 +1,6 @@
+import os
 import torch
+from PIL import Image
 from transformers import CLIPProcessor, CLIPVisionModel
 from torch.nn.functional import normalize
 import numpy as np
@@ -32,11 +34,13 @@ class SmoothCLIP:
     ) -> Tuple[torch.Tensor, float]:
         """Get smoothed image features using randomized smoothing."""
         # Process the image
-        inputs = self.processor(images=image, return_tensors="pt").to(self.device)
+        inputs = self.processor(images=image, return_tensors="pt")
+        inputs = inputs.to(self.device)['pixel_values']
         
         # Get base features
         with torch.no_grad():
-            image_features = self.model.get_image_features(**inputs)
+            outputs = self.model(inputs)
+            image_features = outputs.pooler_output
             image_features = normalize(image_features, dim=-1)
 
         # Apply randomized smoothing
@@ -143,18 +147,20 @@ class SmoothCLIPWithLinear:
     ) -> Tuple[torch.Tensor, Optional[float]]:
         """Get smoothed features using randomized smoothing."""
         # Process the image
-        inputs = self.processor(images=image, return_tensors="pt").to(self.device)
+        inputs = self.processor(images=image, return_tensors="pt")
+        inputs = inputs.to(self.device)['pixel_values']
         
         # Get base features
         with torch.no_grad():
-            base_features = self.model(**inputs)
+            outputs = self.model.clip(inputs)
+            base_features = self.model.linear(outputs.pooler_output)
 
         # Apply randomized smoothing
         smoothed_features = torch.zeros_like(base_features)
         for _ in range(self.num_samples):
             # Add noise to CLIP features before linear layer
             with torch.no_grad():
-                clip_outputs = self.model.clip(**inputs)
+                clip_outputs = self.model.clip(inputs)
                 noisy_features = self._add_noise(clip_outputs.pooler_output)
                 smoothed_features += self.model.linear(noisy_features)
 
