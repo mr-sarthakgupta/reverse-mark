@@ -1,5 +1,5 @@
 import argparse
-import wandb
+# import wandb
 import copy
 from tqdm import tqdm
 from statistics import mean, stdev
@@ -16,10 +16,10 @@ from io_utils import *
 
 def main(args):
     table = None
-    if args.with_tracking:
-        wandb.init(project='diffusion_watermark', name=args.run_name, tags=['tree_ring_watermark'])
-        wandb.config.update(args)
-        table = wandb.Table(columns=['gen_no_w', 'no_w_clip_score', 'gen_w', 'w_clip_score', 'prompt', 'no_w_metric', 'w_metric'])
+    # if args.with_tracking:
+    #     wandb.init(project='diffusion_watermark', name=args.run_name, tags=['tree_ring_watermark'])
+    #     wandb.config.update(args)
+    #     table = wandb.Table(columns=['gen_no_w', 'no_w_clip_score', 'gen_w', 'w_clip_score', 'prompt', 'no_w_metric', 'w_metric'])
     
     # load diffusion model
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -141,15 +141,15 @@ def main(args):
         no_w_metrics.append(-no_w_metric)
         w_metrics.append(-w_metric)
 
-        if args.with_tracking:
-            if (args.reference_model is not None) and (i < args.max_num_log_image):
-                # log images when we use reference_model
-                table.add_data(wandb.Image(orig_image_no_w), w_no_sim, wandb.Image(orig_image_w), w_sim, current_prompt, no_w_metric, w_metric)
-            else:
-                table.add_data(None, w_no_sim, None, w_sim, current_prompt, no_w_metric, w_metric)
+        # if args.with_tracking:
+        #     if (args.reference_model is not None) and (i < args.max_num_log_image):
+        #         # log images when we use reference_model
+        #         table.add_data(wandb.Image(orig_image_no_w), w_no_sim, wandb.Image(orig_image_w), w_sim, current_prompt, no_w_metric, w_metric)
+        #     else:
+        #         table.add_data(None, w_no_sim, None, w_sim, current_prompt, no_w_metric, w_metric)
 
-            clip_scores.append(w_no_sim)
-            clip_scores_w.append(w_sim)
+            # clip_scores.append(w_no_sim)
+            # clip_scores_w.append(w_sim)
 
     # roc
     preds = no_w_metrics +  w_metrics
@@ -160,11 +160,11 @@ def main(args):
     acc = np.max(1 - (fpr + (1 - tpr))/2)
     low = tpr[np.where(fpr<.01)[0][-1]]
 
-    if args.with_tracking:
-        wandb.log({'Table': table})
-        wandb.log({'clip_score_mean': mean(clip_scores), 'clip_score_std': stdev(clip_scores),
-                   'w_clip_score_mean': mean(clip_scores_w), 'w_clip_score_std': stdev(clip_scores_w),
-                   'auc': auc, 'acc':acc, 'TPR@1%FPR': low})
+    # if args.with_tracking:
+    #     wandb.log({'Table': table})
+    #     wandb.log({'clip_score_mean': mean(clip_scores), 'clip_score_std': stdev(clip_scores),
+    #                'w_clip_score_mean': mean(clip_scores_w), 'w_clip_score_std': stdev(clip_scores_w),
+    #                'auc': auc, 'acc':acc, 'TPR@1%FPR': low})
     
     print(f'clip_score_mean: {mean(clip_scores)}')
     print(f'w_clip_score_mean: {mean(clip_scores_w)}')

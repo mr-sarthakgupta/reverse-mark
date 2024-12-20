@@ -14,4 +14,4 @@ def create_and_save_linear_layer(input_dim: int = 512, output_dim: int = 2):
     print(f"Linear layer saved with input dim {input_dim} and output dim {output_dim}")
 
 if __name__ == "__main__":
-    create_and_save_linear_layer()
+    create_and_save_linear_layer(input_dim = 768)

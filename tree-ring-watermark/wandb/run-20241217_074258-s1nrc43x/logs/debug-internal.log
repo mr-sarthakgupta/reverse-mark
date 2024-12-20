@@ -1,0 +1,3 @@
+{"time":"2024-12-17T07:42:58.396599162+05:30","level":"INFO","msg":"using version","core version":"0.19.1"}
+{"time":"2024-12-17T07:42:58.396879322+05:30","level":"INFO","msg":"created symlink","path":"/scratch/vidit_a_mfs.iitr/reverse-mark/tree-ring-watermark/wandb/run-20241217_074258-s1nrc43x/logs/debug-core.log"}
+{"time":"2024-12-17T07:42:58.397045284+05:30","level":"ERROR+4","msg":"stream_init: failed to fetch credentials: couldn't get API key: settings: failed to get API key from netrc: open /home/vidit_a_mfs.iitr/.netrc: no such file or directory"}

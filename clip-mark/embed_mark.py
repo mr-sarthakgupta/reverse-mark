@@ -27,11 +27,11 @@ def process_images(image_dir="images/"):
             
             # Preprocess image using CLIP processor
             inputs = processor(images=image, return_tensors="pt")
-            inputs = inputs.to(device)
+            inputs = inputs.to(device)['pixel_values']
             
             # Get image embeddings
             with torch.no_grad():
-                outputs = model(**inputs)
+                outputs  = model(inputs)
                 image_features = outputs.pooler_output
             
             image_embeddings.append(image_features)
@@ -80,7 +80,7 @@ class ProjectedCLIPAttacker(nn.Module):
     
     def forward(self, x):
         # Process through CLIP and projector
-        clip_outputs = self.model(**x)
+        clip_outputs = self.model(x)
         projected = self.projector(clip_outputs.pooler_output)
         return projected
     
@@ -102,12 +102,13 @@ class ProjectedCLIPAttacker(nn.Module):
         """
         # Get adversarial images
         inputs = self.processor(images=images, return_tensors="pt")
-        inputs = inputs.to(self.model.device)
+        inputs = inputs.to(self.model.device)['pixel_values']
         
         # Create target labels
         targets = torch.tensor(target_indices).to(self.model.device)
         
         # Run attack
+        
         adv_images = self.adversary.run_standard_evaluation(
             inputs,
             targets,
@@ -147,7 +148,7 @@ if __name__ == "__main__":
     clip_model = clip_model.to(device)
     
     # Create and train projector (assuming you have trained it)
-    projector = EmbeddingProjector()
+    projector = EmbeddingProjector(input_dim = 768)
     projector = projector.to(device)
     
     # Project all embeddings to 2D
