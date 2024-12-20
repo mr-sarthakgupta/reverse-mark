@@ -6,6 +6,7 @@ from transformers import CLIPProcessor, CLIPVisionModel
 from torch.nn.functional import normalize
 import numpy as np
 from typing import List, Tuple
+import torch.nn.functional as F
 
 class SmoothCLIP:
     def __init__(
@@ -105,7 +106,7 @@ class CLIPWithLinear(nn.Module):
     ):
         super().__init__()
         self.clip = CLIPVisionModel.from_pretrained(model_name)
-        self.linear = nn.Linear(512, 512)  # Assuming 512 is the CLIP embedding dimension
+        self.linear = nn.Linear(768, 2)  # Assuming 512 is the CLIP embedding dimension
         
         # Load the linear layer weights
         state_dict = torch.load(linear_path)
@@ -198,23 +199,62 @@ class SmoothCLIPWithLinear:
             
         return image_features, image_paths
 
+    def detect_watermark(
+        self,
+        image_path: str,
+        keys_dir: str = "keys/",
+        confidence_threshold: float = 0.8
+    ) -> Tuple[bool, float]:
+        """
+        Detect if image contains a watermark by comparing with key files.
+        Returns (is_watermarked, confidence_score)
+        """
+        # Load and process target image
+        image = Image.open(image_path)
+        image_features, _ = self.get_smooth_features(image)
+        
+        # Process all key files
+        key_features = []
+        for key_file in os.listdir(keys_dir):
+            if key_file.lower().endswith(('.pth', '.pt')):
+                key_path = os.path.join(keys_dir, key_file)
+                key = torch.load(key_path).to(self.device)
+                key_features.append(key)
+        
+        if not key_features:
+            raise ValueError("No key files found in keys directory")
+            
+        key_features = torch.stack(key_features)
+        
+        # Calculate similarities with all keys
+        similarities = F.cosine_similarity(
+            image_features.unsqueeze(0),  # [1, dim]
+            key_features,                 # [num_keys, dim]
+            dim=1
+        )
+        
+        # Check if maximum similarity exceeds threshold
+        max_similarity = similarities.max().item()
+        is_watermarked = max_similarity >= confidence_threshold
+        
+        return is_watermarked, max_similarity
 
 # Example usage
-
-smooth_clip = SmoothCLIP(
-    noise_level=0.1,
-    num_samples=100
-)
-for image_name in os.listdir("images/"):
-    # Load your image
-    image = Image.open(image_name)
-
-    # Get similarities with confidence
-    similarities, confidence = smooth_clip.get_similarity(
-        image,
-        text_queries,
-        return_confidence=True
+def main(image_path):
+    model = SmoothCLIPWithLinear(
+        noise_level=0.1,
+        num_samples=100
     )
+    
+    # Process single image
+    is_watermarked, confidence = model.detect_watermark(
+        image_path,
+        confidence_threshold=0.8
+    )
+    print(f"Image {image_path}:")
+    print(f"Watermarked: {is_watermarked}")
+    print(f"Confidence: {confidence:.4f}")
 
-    print(f"Similarities: {similarities}")
-    print(f"Confidence: {confidence}")
+if __name__ == "__main__":
+    for image_path in os.listdir("images/"):
+        main(f"images/{image_path}")
