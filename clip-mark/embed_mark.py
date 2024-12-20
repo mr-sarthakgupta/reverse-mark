@@ -221,28 +221,14 @@ if __name__ == "__main__":
     clip_model = CLIPVisionModel.from_pretrained("openai/clip-vit-base-patch32")
     processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    clip_model = clip_model.to(device)
-    
-    # Create and train projector (assuming you have trained it)
-    projector = EmbeddingProjector(input_dim = 768)
-    projector = projector.to(device)
-    
-    # Project all embeddings to 2D
-    with torch.no_grad():
-        target_points = projector(embeddings)
-    
+    clip_model = clip_model.to(device)    
+
+    target_points = torch.randint(0, int(embeddings.shape[-1]) - 1, (25, )).to(device)
+
     # Save target points
     os.makedirs('keys', exist_ok=True)
     torch.save(target_points, 'keys/target_points.pt')
     
-    # Create both attackers
-    projected_attacker = ProjectedCLIPAttacker(
-        clip_model=clip_model,
-        clip_processor=processor,
-        projector=projector,
-        target_points=target_points,
-        save_dir="embedded_images_projected"
-    )
     
     clip_attacker = CLIPAttacker(
         clip_model=clip_model,
@@ -256,12 +242,6 @@ if __name__ == "__main__":
     target_indices = [(i + 1) % len(paths) for i in range(len(paths))]
     original_filenames = [os.path.basename(path) for path in paths]
     
-    # Attack and save with projected attacker
-    adv_images_proj, saved_paths_proj = projected_attacker.attack_and_save(
-        original_images,
-        target_indices,
-        original_filenames
-    )
     
     # Attack and save with CLIP attacker
     adv_images_clip, saved_paths_clip = clip_attacker.attack_and_save(
@@ -270,5 +250,4 @@ if __name__ == "__main__":
         original_filenames
     )
     
-    print(f"Saved {len(saved_paths_proj)} projected adversarial images to {projected_attacker.save_dir}/")
     print(f"Saved {len(saved_paths_clip)} CLIP adversarial images to {clip_attacker.save_dir}/")

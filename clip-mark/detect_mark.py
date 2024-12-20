@@ -1,6 +1,7 @@
 import os
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from PIL import Image
 from transformers import CLIPProcessor, CLIPVisionModel
 from torch.nn.functional import normalize
@@ -105,7 +106,7 @@ class CLIPWithLinear(nn.Module):
     ):
         super().__init__()
         self.clip = CLIPVisionModel.from_pretrained(model_name)
-        self.linear = nn.Linear(512, 512)  # Assuming 512 is the CLIP embedding dimension
+        self.linear = nn.Linear(768, 2)  # Assuming 512 is the CLIP embedding dimension
         
         # Load the linear layer weights
         state_dict = torch.load(linear_path)
@@ -342,6 +343,7 @@ class SmoothCLIPEmbedding:
         key_features = torch.stack(key_features)
         
         # Calculate similarities with all keys
+
         similarities = F.cosine_similarity(
             image_features.unsqueeze(0),
             key_features,
@@ -370,14 +372,14 @@ def main(image_path):
     # Detect projected watermark
     is_watermarked_proj, confidence_proj = projected_detector.detect_watermark(
         image_path,
-        keys_dir="keys/projected/",
+        keys_dir="keys/",
         confidence_threshold=0.8
     )
     
     # Detect CLIP embedding watermark
     is_watermarked_clip, confidence_clip = clip_detector.detect_watermark(
         image_path,
-        keys_dir="keys/clip/",
+        keys_dir="keys/",
         confidence_threshold=0.8
     )
     
