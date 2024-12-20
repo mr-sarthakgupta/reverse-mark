@@ -155,6 +155,10 @@ if __name__ == "__main__":
     with torch.no_grad():
         target_points = projector(embeddings)
     
+    # Save target points
+    os.makedirs('keys', exist_ok=True)
+    torch.save(target_points, 'keys/target_points.pt')
+    
     # Create projected attacker
     projected_attacker = ProjectedCLIPAttacker(
         clip_model=clip_model,
