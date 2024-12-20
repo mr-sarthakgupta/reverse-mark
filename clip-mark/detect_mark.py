@@ -1,5 +1,6 @@
 import os
 import torch
+import torch.nn as nn
 from PIL import Image
 from transformers import CLIPProcessor, CLIPVisionModel
 from torch.nn.functional import normalize
@@ -144,7 +145,7 @@ class SmoothCLIPWithLinear:
         self, 
         image, 
         return_confidence: bool = False
-    ) -> Tuple[torch.Tensor, Optional[float]]:
+    ):
         """Get smoothed features using randomized smoothing."""
         # Process the image
         inputs = self.processor(images=image, return_tensors="pt")
@@ -199,23 +200,21 @@ class SmoothCLIPWithLinear:
 
 
 # Example usage
-"""
+
 smooth_clip = SmoothCLIP(
     noise_level=0.1,
     num_samples=100
 )
+for image_name in os.listdir("images/"):
+    # Load your image
+    image = Image.open(image_name)
 
-# Load your image
-image = Image.open("path_to_image.jpg")
+    # Get similarities with confidence
+    similarities, confidence = smooth_clip.get_similarity(
+        image,
+        text_queries,
+        return_confidence=True
+    )
 
-# Get similarities with confidence
-text_queries = ["a photo of a dog", "a photo of a cat"]
-similarities, confidence = smooth_clip.get_similarity(
-    image,
-    text_queries,
-    return_confidence=True
-)
-
-print(f"Similarities: {similarities}")
-print(f"Confidence: {confidence}")
-"""
+    print(f"Similarities: {similarities}")
+    print(f"Confidence: {confidence}")
