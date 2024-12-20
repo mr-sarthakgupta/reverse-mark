@@ -6,7 +6,6 @@ from transformers import CLIPProcessor, CLIPVisionModel
 from torch.nn.functional import normalize
 import numpy as np
 from typing import List, Tuple
-import torch.nn.functional as F
 
 class SmoothCLIP:
     def __init__(
@@ -106,7 +105,7 @@ class CLIPWithLinear(nn.Module):
     ):
         super().__init__()
         self.clip = CLIPVisionModel.from_pretrained(model_name)
-        self.linear = nn.Linear(768, 2)  # Assuming 512 is the CLIP embedding dimension
+        self.linear = nn.Linear(512, 512)  # Assuming 512 is the CLIP embedding dimension
         
         # Load the linear layer weights
         state_dict = torch.load(linear_path)
@@ -239,21 +238,152 @@ class SmoothCLIPWithLinear:
         
         return is_watermarked, max_similarity
 
+class SmoothCLIPEmbedding:
+    def __init__(
+        self,
+        model_name: str = "openai/clip-vit-base-patch32",
+        noise_level: float = 0.1,
+        num_samples: int = 100,
+        device: str = "cuda" if torch.cuda.is_available() else "cpu"
+    ):
+        self.model = CLIPVisionModel.from_pretrained(model_name).to(device)
+        self.processor = CLIPProcessor.from_pretrained(model_name)
+        self.noise_level = noise_level
+        self.num_samples = num_samples
+        self.device = device
+        self.model.eval()
+
+    def _add_noise(self, features: torch.Tensor) -> torch.Tensor:
+        """Add Gaussian noise to features."""
+        noise = torch.randn_like(features) * self.noise_level
+        return features + noise
+
+    def get_smooth_features(
+        self, 
+        image, 
+        return_confidence: bool = False
+    ):
+        """Get smoothed CLIP embeddings using randomized smoothing."""
+        # Process the image
+        inputs = self.processor(images=image, return_tensors="pt")
+        inputs = inputs.to(self.device)['pixel_values']
+        
+        # Get base features
+        with torch.no_grad():
+            outputs = self.model(inputs)
+            base_features = outputs.pooler_output
+
+        # Apply randomized smoothing
+        smoothed_features = torch.zeros_like(base_features)
+        for _ in range(self.num_samples):
+            with torch.no_grad():
+                clip_outputs = self.model(inputs)
+                noisy_features = self._add_noise(clip_outputs.pooler_output)
+                smoothed_features += noisy_features
+
+        # Average the features
+        smoothed_features = smoothed_features / self.num_samples
+        
+        if return_confidence:
+            # Calculate confidence as cosine similarity between smoothed and original
+            confidence = F.cosine_similarity(smoothed_features, base_features, dim=-1)
+            return smoothed_features, confidence.item()
+        
+        return smoothed_features, None
+
+    def process_image_directory(
+        self, 
+        image_dir: str = "images/"
+    ) -> Tuple[torch.Tensor, List[str]]:
+        """Process all images in a directory and return their smoothed features."""
+        image_features = []
+        image_paths = []
+        
+        for filename in os.listdir(image_dir):
+            if filename.lower().endswith(('.png', '.jpg', '.jpeg')):
+                image_path = os.path.join(image_dir, filename)
+                image = Image.open(image_path)
+                
+                # Get smoothed features
+                features, _ = self.get_smooth_features(image)
+                image_features.append(features)
+                image_paths.append(image_path)
+        
+        if image_features:
+            image_features = torch.cat(image_features, dim=0)
+            
+        return image_features, image_paths
+
+    def detect_watermark(
+        self,
+        image_path: str,
+        keys_dir: str = "keys/",
+        confidence_threshold: float = 0.8
+    ) -> Tuple[bool, float]:
+        """
+        Detect if image contains a CLIP embedding watermark by comparing with key files.
+        Returns (is_watermarked, confidence_score)
+        """
+        # Load and process target image
+        image = Image.open(image_path)
+        image_features, _ = self.get_smooth_features(image)
+        
+        # Process all key files
+        key_features = []
+        for key_file in os.listdir(keys_dir):
+            if key_file.lower().endswith(('.pth', '.pt')):
+                key_path = os.path.join(keys_dir, key_file)
+                key = torch.load(key_path).to(self.device)
+                key_features.append(key)
+        
+        if not key_features:
+            raise ValueError("No key files found in keys directory")
+            
+        key_features = torch.stack(key_features)
+        
+        # Calculate similarities with all keys
+        similarities = F.cosine_similarity(
+            image_features.unsqueeze(0),
+            key_features,
+            dim=1
+        )
+        
+        # Check if maximum similarity exceeds threshold
+        max_similarity = similarities.max().item()
+        is_watermarked = max_similarity >= confidence_threshold
+        
+        return is_watermarked, max_similarity
+
 # Example usage
 def main(image_path):
-    model = SmoothCLIPWithLinear(
+    # Initialize both detectors
+    projected_detector = SmoothCLIPWithLinear(
         noise_level=0.1,
         num_samples=100
     )
     
-    # Process single image
-    is_watermarked, confidence = model.detect_watermark(
+    clip_detector = SmoothCLIPEmbedding(
+        noise_level=0.1,
+        num_samples=100
+    )
+    
+    # Detect projected watermark
+    is_watermarked_proj, confidence_proj = projected_detector.detect_watermark(
         image_path,
+        keys_dir="keys/projected/",
         confidence_threshold=0.8
     )
+    
+    # Detect CLIP embedding watermark
+    is_watermarked_clip, confidence_clip = clip_detector.detect_watermark(
+        image_path,
+        keys_dir="keys/clip/",
+        confidence_threshold=0.8
+    )
+    
     print(f"Image {image_path}:")
-    print(f"Watermarked: {is_watermarked}")
-    print(f"Confidence: {confidence:.4f}")
+    print(f"Projected Watermark: {is_watermarked_proj} (confidence: {confidence_proj:.4f})")
+    print(f"CLIP Watermark: {is_watermarked_clip} (confidence: {confidence_clip:.4f})")
 
 if __name__ == "__main__":
     for image_path in os.listdir("images/"):

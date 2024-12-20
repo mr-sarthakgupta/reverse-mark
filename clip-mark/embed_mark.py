@@ -134,6 +134,82 @@ class ProjectedCLIPAttacker(nn.Module):
             
         return adv_images, saved_paths
 
+class CLIPAttacker(nn.Module):
+    def __init__(self, clip_model, clip_processor, target_embeddings, eps=8/255, save_dir="clip_images"):
+        super().__init__()
+        self.model = clip_model
+        self.processor = clip_processor
+        self.target_embeddings = target_embeddings  # Shape: [N, 768] - the CLIP embeddings
+        self.save_dir = save_dir
+        
+        # Create save directory if it doesn't exist
+        os.makedirs(save_dir, exist_ok=True)
+        
+        # Initialize AutoAttack with custom loss
+        self.adversary = AutoAttack(
+            self,
+            norm='Linf',
+            eps=eps,
+            version='custom',
+            attacks_to_run=['apgd-ce']
+        )
+        
+        # Transform to convert tensors back to PIL images
+        self.to_pil = T.ToPILImage()
+    
+    def forward(self, x):
+        # Process through CLIP only
+        clip_outputs = self.model(x)
+        return clip_outputs.pooler_output
+    
+    def get_logits(self, x):
+        # AutoAttack expects logits, so we compute negative L2 distances
+        clip_embeddings = self.forward(x)
+        distances = -torch.cdist(clip_embeddings, self.target_embeddings)
+        return distances
+    
+    def attack_and_save(self, images, target_indices, original_filenames=None):
+        """
+        Attack images and save the results
+        
+        Args:
+            images: List of PIL images
+            target_indices: List of indices into self.target_embeddings for each image
+            original_filenames: Optional list of original filenames to use as base names
+        """
+        # Get adversarial images
+        inputs = self.processor(images=images, return_tensors="pt")
+        inputs = inputs.to(self.model.device)['pixel_values']
+        
+        # Create target labels
+        targets = torch.tensor(target_indices).to(self.model.device)
+        
+        # Run attack
+        adv_images = self.adversary.run_standard_evaluation(
+            inputs,
+            targets,
+            bs=len(images)
+        )
+        
+        # If no filenames provided, generate generic ones
+        if original_filenames is None:
+            original_filenames = [f"image_{i}.png" for i in range(len(images))]
+        
+        # Save each adversarial image
+        saved_paths = []
+        for i, (adv_image, orig_name) in enumerate(zip(adv_images, original_filenames)):
+            # Create filename with target index
+            base_name = os.path.splitext(orig_name)[0]
+            save_name = f"{base_name}_clip_target_{target_indices[i]}.png"
+            save_path = os.path.join(self.save_dir, save_name)
+            
+            # Convert tensor to PIL image and save
+            pil_image = self.to_pil(adv_image.squeeze(0).cpu())
+            pil_image.save(save_path)
+            saved_paths.append(save_path)
+            
+        return adv_images, saved_paths
+
 # Updated main block to demonstrate both attackers
 if __name__ == "__main__":
     # Get original embeddings
@@ -159,8 +235,8 @@ if __name__ == "__main__":
     os.makedirs('keys', exist_ok=True)
     torch.save(target_points, 'keys/target_points.pt')
     
-    # Create projected attacker
-    attacker = ProjectedCLIPAttacker(
+    # Create both attackers
+    projected_attacker = ProjectedCLIPAttacker(
         clip_model=clip_model,
         clip_processor=processor,
         projector=projector,
@@ -168,18 +244,31 @@ if __name__ == "__main__":
         save_dir="embedded_images_projected"
     )
     
-    # Attack each image, targeting the next image in sequence
+    clip_attacker = CLIPAttacker(
+        clip_model=clip_model,
+        clip_processor=processor,
+        target_embeddings=embeddings,
+        save_dir="embedded_images_clip"
+    )
+    
+    # Attack using both methods
     original_images = [Image.open(path) for path in paths]
     target_indices = [(i + 1) % len(paths) for i in range(len(paths))]
     original_filenames = [os.path.basename(path) for path in paths]
     
-    # Attack and save
-    adv_images, saved_paths = projected_attacker.attack_and_save(
+    # Attack and save with projected attacker
+    adv_images_proj, saved_paths_proj = projected_attacker.attack_and_save(
         original_images,
         target_indices,
         original_filenames
     )
     
-    print(f"Saved {len(saved_paths)} adversarial images to {projected_attacker.save_dir}/")
-    for orig, target, path in zip(original_filenames, target_indices, saved_paths):
-        print(f"Original: {orig} -> Target: {target} -> Saved as: {os.path.basename(path)}")
+    # Attack and save with CLIP attacker
+    adv_images_clip, saved_paths_clip = clip_attacker.attack_and_save(
+        original_images,
+        target_indices,
+        original_filenames
+    )
+    
+    print(f"Saved {len(saved_paths_proj)} projected adversarial images to {projected_attacker.save_dir}/")
+    print(f"Saved {len(saved_paths_clip)} CLIP adversarial images to {clip_attacker.save_dir}/")
