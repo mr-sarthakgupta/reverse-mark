@@ -102,10 +102,10 @@ class ProjectedCLIPAttacker(nn.Module):
         """
         # Get adversarial images
         inputs = self.processor(images=images, return_tensors="pt")
-        inputs = inputs.to(self.model.device)['pixel_values']
+        inputs = inputs.to("cuda:0" if torch.cuda.is_available() else 'cpu')['pixel_values']
         
         # Create target labels
-        targets = torch.tensor(target_indices).to(self.model.device)
+        targets = torch.tensor(target_indices).to("cuda:0" if torch.cuda.is_available() else 'cpu')
         
         # Run attack
         
@@ -134,10 +134,21 @@ class ProjectedCLIPAttacker(nn.Module):
             
         return adv_images, saved_paths
 
+class SoftmaxCLIP(nn.Module):
+    def __init__(self, clip_model):
+        super(SoftmaxCLIP, self).__init__()
+        self.model = clip_model
+        
+    def forward(self, x):
+        # Process through CLIP only
+        clip_outputs = self.model(x)
+        # return F.softmax(clip_outputs.pooler_output)
+        return clip_outputs.pooler_output
+
 class CLIPAttacker(nn.Module):
     def __init__(self, clip_model, clip_processor, target_embeddings, eps=8/255, save_dir="clip_images"):
         super().__init__()
-        self.model = clip_model
+        self.model = SoftmaxCLIP(clip_model)
         self.processor = clip_processor
         self.target_embeddings = target_embeddings  # Shape: [N, 768] - the CLIP embeddings
         self.save_dir = save_dir
@@ -150,8 +161,7 @@ class CLIPAttacker(nn.Module):
             self,
             norm='Linf',
             eps=eps,
-            version='custom',
-            attacks_to_run=['apgd-ce']
+            version='standard'
         )
         
         # Transform to convert tensors back to PIL images
@@ -160,13 +170,8 @@ class CLIPAttacker(nn.Module):
     def forward(self, x):
         # Process through CLIP only
         clip_outputs = self.model(x)
-        return clip_outputs.pooler_output
-    
-    def get_logits(self, x):
-        # AutoAttack expects logits, so we compute negative L2 distances
-        clip_embeddings = self.forward(x)
-        distances = -torch.cdist(clip_embeddings, self.target_embeddings)
-        return distances
+        # return F.softmax(clip_outputs)
+        return clip_outputs
     
     def attack_and_save(self, images, target_indices, original_filenames=None):
         """
@@ -177,19 +182,40 @@ class CLIPAttacker(nn.Module):
             target_indices: List of indices into self.target_embeddings for each image
             original_filenames: Optional list of original filenames to use as base names
         """
-        # Get adversarial images
+        
         inputs = self.processor(images=images, return_tensors="pt")
-        inputs = inputs.to(self.model.device)['pixel_values']
+        inputs = inputs.to("cuda:0" if torch.cuda.is_available() else 'cpu')['pixel_values'][0].unsqueeze(0)
         
-        # Create target labels
-        targets = torch.tensor(target_indices).to(self.model.device)
+        targets = target_indices.to("cuda:0" if torch.cuda.is_available() else 'cpu')
         
+        logits = self.model(inputs)
+
+        top_indices = torch.topk(logits, 25, dim=1).indices
+
+        print("Top 25 highest value indices for each image:", top_indices)
+        count = sum(1 for idx in target_indices if idx in top_indices)
+        print(f"initial images : {count}")
+                
         # Run attack
         adv_images = self.adversary.run_standard_evaluation(
             inputs,
-            targets,
+            [625],
             bs=len(images)
-        )
+        )   
+        logits = self.model(adv_images)
+        print("Top 25 highest value indices for each image after attack:", torch.topk(logits, 25, dim=1).indices)
+        count = sum(1 for idx in target_indices if idx in top_indices)
+        print(f"adv images : {count}")
+        # print(adv_images.shape, inputs.shape)
+        print(torch.sum(torch.abs(adv_images - inputs)))
+        exit()
+
+        # Print the top 25 indices for each adversarial image
+        for i, logits in enumerate(logits):
+            top_indices = torch.topk(logits, 25, dim=0).indices
+            # print(f"Top 25 indices for adversarial image {i}: {top_indices}")
+            count = sum(1 for idx in target_indices if idx in top_indices)
+            print(f"{i}: {count}")
         
         # If no filenames provided, generate generic ones
         if original_filenames is None:
@@ -214,8 +240,6 @@ class CLIPAttacker(nn.Module):
 if __name__ == "__main__":
     # Get original embeddings
     embeddings, paths = process_images()
-    print(f"Processed {len(paths)} images")
-    print(f"Embedding shape: {embeddings.shape}")
     
     # Initialize models
     clip_model = CLIPVisionModel.from_pretrained("openai/clip-vit-base-patch32")
@@ -223,13 +247,12 @@ if __name__ == "__main__":
     device = "cuda" if torch.cuda.is_available() else "cpu"
     clip_model = clip_model.to(device)    
 
-    target_points = torch.randint(0, int(embeddings.shape[-1]) - 1, (25, )).to(device)
+    target_indices = torch.randint(0, int(embeddings.shape[-1]) - 1, (25, )).to(device)
 
     # Save target points
     os.makedirs('keys', exist_ok=True)
-    torch.save(target_points, 'keys/target_points.pt')
-    
-    
+    torch.save(target_indices, 'keys/target_points.pt')
+
     clip_attacker = CLIPAttacker(
         clip_model=clip_model,
         clip_processor=processor,
@@ -239,9 +262,7 @@ if __name__ == "__main__":
     
     # Attack using both methods
     original_images = [Image.open(path) for path in paths]
-    target_indices = [(i + 1) % len(paths) for i in range(len(paths))]
     original_filenames = [os.path.basename(path) for path in paths]
-    
     
     # Attack and save with CLIP attacker
     adv_images_clip, saved_paths_clip = clip_attacker.attack_and_save(
