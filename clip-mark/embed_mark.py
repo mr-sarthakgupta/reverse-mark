@@ -1,4 +1,6 @@
+from random import shuffle
 import torch
+from torchvision.transforms.functional import pil_to_tensor
 from torch import nn
 from PIL import Image
 from transformers import CLIPProcessor, CLIPVisionModel
@@ -20,7 +22,11 @@ def process_images(image_dir="images/"):
     image_paths = []
     
     # Process each image in the directory
-    for filename in os.listdir(image_dir):
+
+    pathlist = list(os.listdir(image_dir))
+    shuffle(pathlist)
+
+    for filename in pathlist:
         if filename.lower().endswith(('.png', '.jpg', '.jpeg')):
             image_path = os.path.join(image_dir, filename)
             image = Image.open(image_path)
@@ -172,68 +178,62 @@ class CLIPAttacker(nn.Module):
         clip_outputs = self.model(x)
         # return F.softmax(clip_outputs)
         return clip_outputs
+
+    def loss_fn(self, outputs, target_indices):
+        softmax_outputs = F.softmax(outputs, dim=-1)
+        labels = torch.zeros_like(outputs)
+        labels[:, target_indices] = 1
+        return torch.norm(softmax_outputs - labels, p=1, dim=-1)
     
     def attack_and_save(self, images, target_indices, original_filenames=None):
-        """
-        Attack images and save the results
-        
-        Args:
-            images: List of PIL images
-            target_indices: List of indices into self.target_embeddings for each image
-            original_filenames: Optional list of original filenames to use as base names
-        """
-        
-        inputs = self.processor(images=images, return_tensors="pt")
-        inputs = inputs.to("cuda:0" if torch.cuda.is_available() else 'cpu')['pixel_values'][0].unsqueeze(0)
-        
-        targets = target_indices.to("cuda:0" if torch.cuda.is_available() else 'cpu')
-        
-        logits = self.model(inputs)
 
-        top_indices = torch.topk(logits, 25, dim=1).indices
-
-        print("Top 25 highest value indices for each image:", top_indices)
-        count = sum(1 for idx in target_indices if idx in top_indices)
-        print(f"initial images : {count}")
+        for image in images:
+            image = pil_to_tensor(image).unsqueeze(0).to("cuda:0" if torch.cuda.is_available() else 'cpu').float()
+            og_image = image.clone()
+            image.requires_grad = True
+            optimizer = torch.optim.AdamW([image], lr=0.01)
+            for _ in range(100):  # Number of attack iterations
+                optimizer.zero_grad()
+                # Forward pass
+                outputs = self.model(self.processor(images=image, return_tensors="pt")['pixel_values'].to("cuda:0" if torch.cuda.is_available() else 'cpu'))
+                # Compute loss as negative of the sum of target indices values
+                loss = self.loss_fn(outputs, target_indices)              
+                # Backward pass
+                loss.backward()                
+                # Update image
+                optimizer.step()                
+                # Clamp image to valid pixel range
+                image.data = torch.clamp(image.data, 0, 1)
                 
-        # Run attack
-        adv_images = self.adversary.run_standard_evaluation(
-            inputs,
-            [625],
-            bs=len(images)
-        )   
-        logits = self.model(adv_images)
-        print("Top 25 highest value indices for each image after attack:", torch.topk(logits, 25, dim=1).indices)
-        count = sum(1 for idx in target_indices if idx in top_indices)
-        print(f"adv images : {count}")
-        # print(adv_images.shape, inputs.shape)
-        print(torch.sum(torch.abs(adv_images - inputs)))
-        exit()
+            adv_images = image.detach()
+            # saved_paths = []
+            # for i, (adv_image, orig_name) in enumerate(zip(adv_images, original_filenames)):
+            #     # Create filename with target index
+            #     base_name = os.path.splitext(orig_name)[0]
+            #     save_name = f"{base_name}_adv_target_{target_indices[i]}.png"
+            #     save_path = os.path.join(self.save_dir, save_name)
+                
+            #     # Convert tensor to PIL image and save
+            #     pil_image = self.to_pil(adv_image.squeeze(0).cpu())
+            #     pil_image.save(save_path)
+            #     saved_paths.append(save_path)
 
-        # Print the top 25 indices for each adversarial image
-        for i, logits in enumerate(logits):
-            top_indices = torch.topk(logits, 25, dim=0).indices
-            # print(f"Top 25 indices for adversarial image {i}: {top_indices}")
-            count = sum(1 for idx in target_indices if idx in top_indices)
-            print(f"{i}: {count}")
-        
-        # If no filenames provided, generate generic ones
-        if original_filenames is None:
-            original_filenames = [f"image_{i}.png" for i in range(len(images))]
-        
-        # Save each adversarial image
-        saved_paths = []
-        for i, (adv_image, orig_name) in enumerate(zip(adv_images, original_filenames)):
-            # Create filename with target index
-            base_name = os.path.splitext(orig_name)[0]
-            save_name = f"{base_name}_clip_target_{target_indices[i]}.png"
-            save_path = os.path.join(self.save_dir, save_name)
-            
-            # Convert tensor to PIL image and save
-            pil_image = self.to_pil(adv_image.squeeze(0).cpu())
-            pil_image.save(save_path)
-            saved_paths.append(save_path)
-            
+            current_outputs = self.model(self.processor(images=adv_images, return_tensors="pt")['pixel_values'].to("cuda:0" if torch.cuda.is_available() else 'cpu'))
+
+
+            _, og_topk_indices = torch.topk(self.model(self.processor(images=og_image, return_tensors="pt")['pixel_values'].to("cuda:0" if torch.cuda.is_available() else 'cpu')).squeeze(), 25)
+            _, adv_topk_indices = torch.topk(current_outputs.squeeze(), 25)
+
+            og_in_target = sum([1 for idx in target_indices if idx in og_topk_indices])
+            adv_in_target = sum([1 for idx in target_indices if idx in adv_topk_indices])
+            print(f"Number of target indices in original top-k: {og_in_target}")
+            print(f"Number of target indices in adversarial top-k: {adv_in_target}")
+            print(f"original outs: {og_topk_indices}")
+            print(f"adversarial outs: {adv_topk_indices}")
+            print(f"target indices: {target_indices}")
+            print(f"linf change in image: {torch.norm(og_image - adv_images, p = float('inf'))}")
+            exit()
+
         return adv_images, saved_paths
 
 # Updated main block to demonstrate both attackers
@@ -263,7 +263,7 @@ if __name__ == "__main__":
     # Attack using both methods
     original_images = [Image.open(path) for path in paths]
     original_filenames = [os.path.basename(path) for path in paths]
-    
+    shuffle(original_images)
     # Attack and save with CLIP attacker
     adv_images_clip, saved_paths_clip = clip_attacker.attack_and_save(
         original_images,
