@@ -1,3 +1,4 @@
+from copy import deepcopy
 from random import shuffle
 import torch
 from torchvision.transforms.functional import pil_to_tensor
@@ -141,23 +142,20 @@ def process_images(image_dir="images/"):
 #         return adv_images, saved_paths
 
 class SoftmaxCLIP(nn.Module):
-    def __init__(self, clip_model):
+    def __init__(self, clip_model, processor):
         super(SoftmaxCLIP, self).__init__()
         self.model = clip_model
-        self.processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
+        self.processor = processor
         
     def forward(self, x):
-        # Process through CLIP only
         x = self.processor(images=x, return_tensors="pt")['pixel_values'].to("cuda:0" if torch.cuda.is_available() else 'cpu')
         clip_outputs = self.model(x)
-        # return F.softmax(clip_outputs.pooler_output)
         return clip_outputs.pooler_output
 
 class CLIPAttacker(nn.Module):
     def __init__(self, clip_model, clip_processor, target_embeddings, eps=8/255, save_dir="clip_images"):
         super().__init__()
-        self.model = SoftmaxCLIP(clip_model)
-        self.processor = clip_processor
+        self.model = SoftmaxCLIP(clip_model, clip_processor)
         self.target_embeddings = target_embeddings  # Shape: [N, 768] - the CLIP embeddings
         self.save_dir = save_dir
         
@@ -167,18 +165,14 @@ class CLIPAttacker(nn.Module):
         # Transform to convert tensors back to PIL images
         self.to_pil = T.ToPILImage()
         self.adversary = AutoAttack(
-            self,
+            model=self.model,
             norm='Linf',
-            eps=eps,
+            eps=8/255,
             version='custom',
+            # version='standard',
+            device="cuda:0",
             attacks_to_run=['apgd-ce']
         )
-    
-    def forward(self, x):
-        # Process through CLIP only
-        clip_outputs = self.model(x)
-        # return F.softmax(clip_outputs)
-        return clip_outputs
 
     def loss_fn(self, outputs, target_indices):
         softmax_outputs = F.softmax(outputs, dim=-1)
@@ -186,39 +180,30 @@ class CLIPAttacker(nn.Module):
         labels[:, target_indices] = 1
         return torch.norm(softmax_outputs - labels, p=1, dim=-1)
 
-
     def attack_and_save(self, images, target_indices, original_filenames=None): 
-        images = images[0]
         images = pil_to_tensor(images).unsqueeze(0).to("cuda:0" if torch.cuda.is_available() else 'cpu').float()
-        
-        print("images.shape", images.shape)
-
-        targets = target_indices.to("cuda:0" if torch.cuda.is_available() else 'cpu')
+        targets = target_indices.to("cuda:0" if torch.cuda.is_available() else 'cpu').squeeze()
         logits = self.model(images)
-
         top_indices = torch.topk(logits, 25, dim=1).indices
-
         print("Top 25 highest value indices for each image:", top_indices)
         count = sum(1 for idx in target_indices if idx in top_indices)
         print(f"initial images : {count}")
         
         print("targets: ", targets)
-
+        
         # Run attack
         adv_images = self.adversary.run_standard_evaluation(
             images,
+            # logits.squeeze(),
             targets,
             bs=len(images)
         )   
-
-        print("adv_images.shape", adv_images.shape)
-
         logits = self.model(adv_images)
         print("Top 25 highest value indices for each image after attack:", torch.topk(logits, 25, dim=1).indices)
         count = sum(1 for idx in target_indices if idx in top_indices)
         print(f"adv images : {count}")
-        # print(adv_images.shape, inputs.shape)
         print(torch.sum(torch.abs(adv_images - images)))
+
         exit()
         return adv_images, saved_paths
 
@@ -269,22 +254,17 @@ class CLIPAttacker(nn.Module):
 
     #     return adv_images, saved_paths
 
-# Updated main block to demonstrate both attackers
 if __name__ == "__main__":
-    # Get original embeddings
     embeddings, paths = process_images()
     
-    # Initialize models
     clip_model = CLIPVisionModel.from_pretrained("openai/clip-vit-base-patch32")
     processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    clip_model = clip_model.to(device)    
+    clip_model = clip_model.to(device)   
 
-    target_indices = torch.randint(0, int(embeddings.shape[-1]) - 1, (25, )).to(device)
+    model = SoftmaxCLIP(clip_model, processor) 
 
-    # Save target points
-    os.makedirs('keys', exist_ok=True)
-    torch.save(target_indices, 'keys/target_points.pt')
+    model.eval()
 
     clip_attacker = CLIPAttacker(
         clip_model=clip_model,
@@ -293,13 +273,24 @@ if __name__ == "__main__":
         save_dir="embedded_images_clip"
     )
     
-    # Attack using both methods
     original_images = [Image.open(path) for path in paths]
     original_filenames = [os.path.basename(path) for path in paths]
-    shuffle(original_images)
-    # Attack and save with CLIP attacker
+    # shuffle(original_images)
+
+    im = deepcopy(original_images[1])
+
+    im = pil_to_tensor(im).unsqueeze(0).to("cuda:0" if torch.cuda.is_available() else 'cpu').float()
+
+    outs = model(im)
+
+    target_indices = torch.topk(outs.squeeze(), 10).indices
+    target_indices = torch.tensor([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]).to("cuda:0" if torch.cuda.is_available() else 'cpu')
+
+    os.makedirs('keys', exist_ok=True)
+    torch.save(target_indices, 'keys/target_points.pt')
+
     adv_images_clip, saved_paths_clip = clip_attacker.attack_and_save(
-        original_images,
+        original_images[0],
         target_indices,
         original_filenames
     )
