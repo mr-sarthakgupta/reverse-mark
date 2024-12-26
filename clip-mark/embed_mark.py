@@ -1,4 +1,4 @@
-import clip
+from open_clip.src import open_clip as clip
 from random import shuffle
 import torch
 from torchvision.transforms.functional import pil_to_tensor
@@ -8,6 +8,10 @@ from transformers import CLIPProcessor, CLIPVisionModel
 import os
 import torch.nn.functional as F
 import torchvision.transforms as T
+import sys
+
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.append('/scratch/vidit_a_mfs.iitr/reverse-mark/clip-mark/open_clip/src')
 
 def process_images(image_dir="images/"):
     # Initialize CLIP vision model and processor
@@ -63,51 +67,35 @@ class EmbeddingProjector(nn.Module):
 class CLIPFwd(nn.Module):
     def __init__(self):
         super(CLIPFwd, self).__init__()
-        self.model, self.preprocess = clip.load("ViT-B/32", device="cuda:0")
+        self.model, _, self.preprocess = clip.create_model_and_transforms('ViT-B-32', pretrained='laion2b_s34b_b79k')
         
     def forward(self, x):
-
-        print(x.device)
-        print(self.preprocess(x).device)
-        exit()
-
-        return self.model.encode_image()
+        return self.model.encode_image(self.preprocess(x))
 
 class CLIPAttacker(nn.Module):
-    def __init__(self, target_embeddings, eps=8/255, save_dir="clip_images"):
+    def __init__(self, eps=8/255, save_dir="clip_images"):
         super().__init__()
         self.model = CLIPFwd()
-        self.target_embeddings = target_embeddings  # Shape: [N, 768] - the CLIP embeddings
         self.save_dir = save_dir
+        self.softmax = nn.Softmax(dim=-1)
         
         # Create save directory if it doesn't exist
         os.makedirs(save_dir, exist_ok=True)
         
         # Transform to convert tensors back to PIL images
         self.to_pil = T.ToPILImage()
-<<<<<<< HEAD
-=======
-        self.adversary = AutoAttack(
-            model=self.model,
-            norm='Linf',
-            eps=8/255,
-            version='custom',
-            # version='standard',
-            device="cuda:0",
-            attacks_to_run=['apgd-ce'],
-            verbose=True, 
-            
-        )
->>>>>>> 344ede2997451873a8985736f09bdc976ede220b
 
     def loss_fn(self, outputs, target_indices):
-        softmax_outputs = F.softmax(outputs, dim=-1)
-        labels = torch.zeros_like(outputs)
+        softmax_outputs = self.softmax(outputs)
+        dim1, dim2 = softmax_outputs.shape
+        labels = torch.zeros(dim1, dim2)
         labels[:, target_indices] = 1
-        return torch.norm(softmax_outputs - labels, p=1, dim=-1)
+        if torch.isnan(softmax_outputs).any() or torch.isnan(labels).any():
+            raise ValueError("NaN values found in the tensors")
+        return torch.norm(softmax_outputs - labels.cuda(), p=1, dim=-1)
     
     def attack_and_save(self, images, target_indices, original_filenames=None):
-        self.model.to("cpu")
+        self.model.to("cuda:0")
         eps = 8/255
         alpha = 2/255
 
@@ -115,15 +103,18 @@ class CLIPAttacker(nn.Module):
             parameter.requires_grad = True
 
         for image in images:
-            # image = pil_to_tensor(image).unsqueeze(0).to("cuda:0").float()
             image = pil_to_tensor(image).unsqueeze(0).float().to("cuda:0") / 255
-
+            
+            with torch.no_grad():
+                og_out_maxes = torch.topk(self.model(image), dim=-1, k = 25).indices
+            print(f"Original output: {og_out_maxes}")
+            
             # image = self.processor(images=image, return_tensors="pt", do_rescale = False)['pixel_values']
             adv_image = image.clone().detach()
             adv_image = adv_image + torch.empty_like(adv_image).uniform_(-eps, eps)
-            adv_image = torch.clamp(adv_image, min = 0, max = 1).detach().to("cpu")
+            adv_image = torch.clamp(adv_image, min = 0, max = 1).detach().to("cuda:0")
             for _ in range(100):  
-                adv_image = adv_image.to("cpu")
+                adv_image = adv_image.to("cuda:0")
                 adv_image.requires_grad = True
                 outputs = self.model(adv_image)
                 loss = self.loss_fn(outputs, target_indices)              
@@ -132,10 +123,19 @@ class CLIPAttacker(nn.Module):
                 adv_image = adv_image.detach() + alpha * torch.sign(grad)
                 delta = torch.clamp(adv_image.cuda() - image.cuda(), min=-eps, max=eps)
                 adv_image = torch.clamp(image.cuda() + delta.cuda(), min=0, max=1).detach()
+        
+            with torch.no_grad():
+                adv_out_maxes = torch.topk(self.model(adv_image), dim=-1, k = 25).indices
+            print(f"Adversarial output: {adv_out_maxes}")
             
-            print(torch.norm(adv_image.cuda() - image.cuda(), p=float('inf')))
+            # Count the number of target indices in both the original and adversarial outputs
+            og_count = sum([1 for idx in target_indices if idx in og_out_maxes])
+            adv_count = sum([1 for idx in target_indices if idx in adv_out_maxes])
+            
+            print(f"Number of target indices in original output: {og_count}")
+            print(f"Number of target indices in adversarial output: {adv_count}")
             exit()
-            
+
         return adv_images, saved_paths
 
 # Updated main block to demonstrate both attackers
@@ -144,19 +144,15 @@ if __name__ == "__main__":
     embeddings, paths = process_images()
     
     # Initialize models
-    clip_model = CLIPVisionModel.from_pretrained("openai/clip-vit-base-patch32")
-    processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    clip_model = clip_model.to(device)    
-
-    target_indices = torch.randint(0, int(embeddings.shape[-1]) - 1, (25, )).to(device)
+    
+    target_indices = torch.randint(0, 512 - 1, (25, )).to(device)
 
     # Save target points
     os.makedirs('keys', exist_ok=True)
     torch.save(target_indices, 'keys/target_points.pt')
 
     clip_attacker = CLIPAttacker(
-        target_embeddings=embeddings,
         save_dir="embedded_images_clip"
     )
     
