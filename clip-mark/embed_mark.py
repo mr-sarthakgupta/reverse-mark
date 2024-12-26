@@ -85,6 +85,20 @@ class CLIPAttacker(nn.Module):
         
         # Transform to convert tensors back to PIL images
         self.to_pil = T.ToPILImage()
+<<<<<<< HEAD
+=======
+        self.adversary = AutoAttack(
+            model=self.model,
+            norm='Linf',
+            eps=8/255,
+            version='custom',
+            # version='standard',
+            device="cuda:0",
+            attacks_to_run=['apgd-ce'],
+            verbose=True, 
+            
+        )
+>>>>>>> 344ede2997451873a8985736f09bdc976ede220b
 
     def loss_fn(self, outputs, target_indices):
         softmax_outputs = F.softmax(outputs, dim=-1)
