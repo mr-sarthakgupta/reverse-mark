@@ -9,49 +9,10 @@ import os
 import torch.nn.functional as F
 import torchvision.transforms as T
 import sys
+import json
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.append('/scratch/vidit_a_mfs.iitr/reverse-mark/clip-mark/open_clip/src')
-
-def process_images(image_dir="images/"):
-    # Initialize CLIP vision model and processor
-    model = CLIPVisionModel.from_pretrained("openai/clip-vit-base-patch32")
-    processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
-    
-    # Move model to GPU if available
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    model = model.to(device)
-    
-    image_embeddings = []
-    image_paths = []
-    
-    # Process each image in the directory
-
-    pathlist = list(os.listdir(image_dir))
-    shuffle(pathlist)
-
-    for filename in pathlist:
-        if filename.lower().endswith(('.png', '.jpg', '.jpeg')):
-            image_path = os.path.join(image_dir, filename)
-            image = Image.open(image_path)
-            
-            # Preprocess image using CLIP processor
-            inputs = processor(images=image, return_tensors="pt")
-            inputs = inputs.to(device)['pixel_values']
-            
-            # Get image embeddings
-            with torch.no_grad():
-                outputs  = model(inputs)
-                image_features = outputs.pooler_output
-            
-            image_embeddings.append(image_features)
-            image_paths.append(image_path)
-            
-    # Stack all embeddings into a single tensor
-    if image_embeddings:
-        image_embeddings = torch.cat(image_embeddings, dim=0)
-        
-    return image_embeddings, image_paths
 
 class EmbeddingProjector(nn.Module):
     def __init__(self, input_dim=512):
@@ -92,28 +53,29 @@ class CLIPAttacker(nn.Module):
         labels[:, target_indices] = 1
         if torch.isnan(softmax_outputs).any() or torch.isnan(labels).any():
             raise ValueError("NaN values found in the tensors")
-        return torch.norm(softmax_outputs - labels.cuda(), p=1, dim=-1)
+        return -1 * torch.norm(softmax_outputs - labels.cuda(), p=1, dim=-1)
     
     def attack_and_save(self, images, target_indices, original_filenames=None):
         self.model.to("cuda:0")
-        eps = 8/255
+        eps = 16/255
         alpha = 2/255
 
         for parameter in self.model.parameters():
             parameter.requires_grad = True
 
-        for image in images:
+        save_dirs = []
+
+        for i, image in enumerate(images):
             image = pil_to_tensor(image).unsqueeze(0).float().to("cuda:0") / 255
             
             with torch.no_grad():
-                og_out_maxes = torch.topk(self.model(image), dim=-1, k = 25).indices
-            print(f"Original output: {og_out_maxes}")
+                og_out_maxes = torch.topk(self.model(image), dim=-1, k = 100).indices
             
             # image = self.processor(images=image, return_tensors="pt", do_rescale = False)['pixel_values']
             adv_image = image.clone().detach()
             adv_image = adv_image + torch.empty_like(adv_image).uniform_(-eps, eps)
             adv_image = torch.clamp(adv_image, min = 0, max = 1).detach().to("cuda:0")
-            for _ in range(100):  
+            for _ in range(1024):  
                 adv_image = adv_image.to("cuda:0")
                 adv_image.requires_grad = True
                 outputs = self.model(adv_image)
@@ -125,23 +87,41 @@ class CLIPAttacker(nn.Module):
                 adv_image = torch.clamp(image.cuda() + delta.cuda(), min=0, max=1).detach()
         
             with torch.no_grad():
-                adv_out_maxes = torch.topk(self.model(adv_image), dim=-1, k = 25).indices
-            print(f"Adversarial output: {adv_out_maxes}")
+                adv_out_maxes = torch.topk(self.model(adv_image), dim=-1, k = 100).indices
+            
             
             # Count the number of target indices in both the original and adversarial outputs
             og_count = sum([1 for idx in target_indices if idx in og_out_maxes])
             adv_count = sum([1 for idx in target_indices if idx in adv_out_maxes])
             
-            print(f"Number of target indices in original output: {og_count}")
-            print(f"Number of target indices in adversarial output: {adv_count}")
-            exit()
-
-        return adv_images, saved_paths
+            # Create subdirectory for each image
+            image_name = original_filenames[i] if original_filenames else f"image_{i}"
+            image_dir = os.path.join(self.save_dir, image_name)
+            os.makedirs(image_dir, exist_ok=True)
+            
+            # Save original image
+            original_image_path = os.path.join(image_dir, f"{image_name}_original.png")
+            self.to_pil(image.squeeze(0).cpu()).save(original_image_path)
+            
+            # Save adversarial image
+            adv_image_path = os.path.join(image_dir, f"{image_name}_adversarial.png")
+            self.to_pil(adv_image.squeeze(0).cpu()).save(adv_image_path)
+            
+            # Save counts to JSON file
+            counts = {
+                "original_count": og_count,
+                "adversarial_count": adv_count
+            }
+            json_path = os.path.join(image_dir, f"{image_name}_counts.json")
+            with open(json_path, 'w') as json_file:
+                json.dump(counts, json_file)
+            save_dirs.append(image_dir)
+        return adv_image, save_dirs
 
 # Updated main block to demonstrate both attackers
 if __name__ == "__main__":
     # Get original embeddings
-    embeddings, paths = process_images()
+    paths = os.listdir('imagenet-mini')
     
     # Initialize models
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -153,16 +133,19 @@ if __name__ == "__main__":
     torch.save(target_indices, 'keys/target_points.pt')
 
     clip_attacker = CLIPAttacker(
-        save_dir="embedded_images_clip"
+        save_dir="adv_images"
     )
     
+    paths = paths[:1]
+
     # Attack using both methods
-    original_images = [Image.open(path) for path in paths]
+    original_images = [Image.open(f"imagenet-mini/{path}") for path in paths]
     original_filenames = [os.path.basename(path) for path in paths]
+
     shuffle(original_images)
     # Attack and save with CLIP attacker
     adv_images_clip, saved_paths_clip = clip_attacker.attack_and_save(
-        original_images[:1],
+        original_images,
         target_indices,
         original_filenames
     )
