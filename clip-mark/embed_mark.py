@@ -136,7 +136,7 @@ if __name__ == "__main__":
         save_dir="adv_images"
     )
     
-    paths = paths[:1]
+    # paths = paths[:1]
 
     # Attack using both methods
     original_images = [Image.open(f"imagenet-mini/{path}") for path in paths]
