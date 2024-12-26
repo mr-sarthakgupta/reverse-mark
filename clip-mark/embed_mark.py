@@ -136,10 +136,14 @@ if __name__ == "__main__":
         save_dir="adv_images"
     )
     
-    # paths = paths[:1]
+    original_images = []
 
-    # Attack using both methods
-    original_images = [Image.open(f"imagenet-mini/{path}") for path in paths]
+    for path in paths:
+        temp = Image.open(f"imagenet-mini/{path}")
+        original_images.append(temp.copy())
+        temp.close()
+
+    # original_images = [Image.open(f"imagenet-mini/{path}") for path in paths]
     original_filenames = [os.path.basename(path) for path in paths]
 
     shuffle(original_images)
