@@ -171,7 +171,9 @@ class CLIPAttacker(nn.Module):
             version='custom',
             # version='standard',
             device="cuda:0",
-            attacks_to_run=['apgd-ce']
+            attacks_to_run=['apgd-ce'],
+            verbose=True, 
+            
         )
 
     def loss_fn(self, outputs, target_indices):
