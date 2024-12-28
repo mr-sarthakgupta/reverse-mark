@@ -57,17 +57,23 @@ class CLIPAttacker(nn.Module):
     
     def attack_and_save(self, images, target_indices, original_filenames=None):
         self.model.to("cuda:0")
-        eps = 16/255
+        eps = 32/255
         alpha = 2/255
 
         for parameter in self.model.parameters():
             parameter.requires_grad = True
 
         save_dirs = []
+        
+        num_fail = 0
 
         for i, image in enumerate(images):
             image = pil_to_tensor(image).unsqueeze(0).float().to("cuda:0") / 255
             
+            if image.shape[1] != 3:
+                num_fail += 1
+                continue
+
             with torch.no_grad():
                 og_out_maxes = torch.topk(self.model(image), dim=-1, k = 100).indices
             
@@ -75,7 +81,7 @@ class CLIPAttacker(nn.Module):
             adv_image = image.clone().detach()
             adv_image = adv_image + torch.empty_like(adv_image).uniform_(-eps, eps)
             adv_image = torch.clamp(adv_image, min = 0, max = 1).detach().to("cuda:0")
-            for _ in range(1024):  
+            for _ in range(4096):  
                 adv_image = adv_image.to("cuda:0")
                 adv_image.requires_grad = True
                 outputs = self.model(adv_image)
@@ -116,6 +122,7 @@ class CLIPAttacker(nn.Module):
             with open(json_path, 'w') as json_file:
                 json.dump(counts, json_file)
             save_dirs.append(image_dir)
+        print(f"Failed for {num_fail} samples")
         return adv_image, save_dirs
 
 # Updated main block to demonstrate both attackers
@@ -138,6 +145,7 @@ if __name__ == "__main__":
     
     original_images = []
 
+    paths = paths[:500]
     for path in paths:
         temp = Image.open(f"imagenet-mini/{path}")
         original_images.append(temp.copy())
