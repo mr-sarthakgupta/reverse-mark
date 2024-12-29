@@ -53,7 +53,8 @@ class CLIPAttacker(nn.Module):
         labels[:, target_indices] = 1
         if torch.isnan(softmax_outputs).any() or torch.isnan(labels).any():
             raise ValueError("NaN values found in the tensors")
-        return -1 * torch.norm(softmax_outputs - labels.cuda(), p=1, dim=-1)
+        # return -1 * torch.norm(softmax_outputs - labels.cuda(), p=float('inf'), dim=-1)
+        return -1 * torch.norm(softmax_outputs - labels.cuda(), p=2, dim=-1)
     
     def attack_and_save(self, images, target_indices, original_filenames=None):
         self.model.to("cuda:0")
@@ -81,7 +82,7 @@ class CLIPAttacker(nn.Module):
             adv_image = image.clone().detach()
             adv_image = adv_image + torch.empty_like(adv_image).uniform_(-eps, eps)
             adv_image = torch.clamp(adv_image, min = 0, max = 1).detach().to("cuda:0")
-            for _ in range(4096):  
+            for _ in range(1024):  
                 adv_image = adv_image.to("cuda:0")
                 adv_image.requires_grad = True
                 outputs = self.model(adv_image)
@@ -118,6 +119,7 @@ class CLIPAttacker(nn.Module):
                 "original_count": og_count,
                 "adversarial_count": adv_count
             }
+            print(i, f"Original count: {og_count}, Adversarial count: {adv_count}")
             json_path = os.path.join(image_dir, f"{image_name}_counts.json")
             with open(json_path, 'w') as json_file:
                 json.dump(counts, json_file)
@@ -140,12 +142,12 @@ if __name__ == "__main__":
     torch.save(target_indices, 'keys/target_points.pt')
 
     clip_attacker = CLIPAttacker(
-        save_dir="adv_images"
+        save_dir="adv_images_linf"
     )
     
     original_images = []
 
-    paths = paths[:500]
+    paths = paths[:400]
     for path in paths:
         temp = Image.open(f"imagenet-mini/{path}")
         original_images.append(temp.copy())
