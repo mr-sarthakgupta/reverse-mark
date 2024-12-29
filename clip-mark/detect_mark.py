@@ -1,392 +1,248 @@
 import os
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-from PIL import Image
-from transformers import CLIPProcessor, CLIPVisionModel
-from torch.nn.functional import normalize
+import json
+import math
+from sklearn.model_selection import train_test_split
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import accuracy_score, precision_score, recall_score
 import numpy as np
-from typing import List, Tuple
+import torch
+from PIL import Image
+import torch.nn as nn
+from open_clip.src import open_clip as clip
+from torchvision.transforms.functional import pil_to_tensor
+import subprocess as sp
+import os
 
-class SmoothCLIP:
-    def __init__(
-        self, 
-        model_name: str = "openai/clip-vit-base-patch32",
-        noise_level: float = 0.1,
-        num_samples: int = 100,
-        device: str = "cuda" if torch.cuda.is_available() else "cpu"
-    ):
-        self.model = CLIPVisionModel.from_pretrained(model_name).to(device)
-        self.processor = CLIPProcessor.from_pretrained(model_name)
-        self.noise_level = noise_level
-        self.num_samples = num_samples
-        self.device = device
+def get_gpu_memory():
+    command = "nvidia-smi --query-gpu=memory.free --format=csv"
+    memory_free_info = sp.check_output(command.split()).decode('ascii').split('\n')[:-1][1:]
+    memory_free_values = [int(x.split()[0]) / 1024 for i, x in enumerate(memory_free_info)]
+    return memory_free_values
 
-    def _add_noise(self, image_features: torch.Tensor) -> torch.Tensor:
-        """Add Gaussian noise to normalized image features."""
-        noise = torch.randn_like(image_features) * self.noise_level
-        noisy_features = image_features + noise
-        # Renormalize features as CLIP expects normalized vectors
-        return normalize(noisy_features, dim=-1)
+def calculate_statistics(directory):
+    total_difference = 0
+    total_original_count = 0
+    total_adv_count = 0
+    file_count = 0
+    original_counts = []
+    adv_counts = []
 
-    def get_smooth_image_features(
-        self, 
-        image,
-        return_confidence: bool = False
-    ) -> Tuple[torch.Tensor, float]:
-        """Get smoothed image features using randomized smoothing."""
-        # Process the image
-        inputs = self.processor(images=image, return_tensors="pt")
-        inputs = inputs.to(self.device)['pixel_values']
+    for subdir, _, files in os.walk(directory):
+        for file in files:
+            if file.endswith('.json'):
+                file_path = os.path.join(subdir, file)
+                with open(file_path, 'r') as f:
+                    data = json.load(f)
+                    original_count = data.get('original_count', 0)
+                    adv_count = data.get('adversarial_count', 0)
+                    total_difference += (original_count - adv_count)
+                    total_original_count += original_count
+                    total_adv_count += adv_count
+                    original_counts.append(original_count)
+                    adv_counts.append(adv_count)
+                    file_count += 1
+
+    if file_count == 0:
+        return 0, 0, 0, 0, 0, 0, 0
+
+    average_difference = total_difference / file_count
+    average_original_count = total_original_count / file_count
+    average_adv_count = total_adv_count / file_count
+
+    std_dev_original = math.sqrt(sum((x - average_original_count) ** 2 for x in original_counts) / file_count)
+    std_dev_adv = math.sqrt(sum((x - average_adv_count) ** 2 for x in adv_counts) / file_count)
+
+    return average_difference, average_original_count, average_adv_count, std_dev_original, std_dev_adv, original_counts, adv_counts
+
+directory = 'adv_images_l2'
+
+average_difference, average_original_count, average_adv_count, std_dev_original, std_dev_adv, original_counts, adv_counts = calculate_statistics(directory)
+print(f'Average difference: {average_difference}')
+print(f'Average original count: {average_original_count}')
+print(f'Average adversarial count: {average_adv_count}')
+print(f'Standard deviation of original count: {std_dev_original}')
+print(f'Standard deviation of adversarial count: {std_dev_adv}')
+
+original_counts = np.array(original_counts)
+adv_counts = np.array(adv_counts)
+
+all_counts = np.concatenate((original_counts, adv_counts))
+
+print(np.zeros(len(original_counts)).shape, np.ones(len(adv_counts)).shape)
+
+print(np.concatenate((np.zeros(len(original_counts)), np.ones(len(adv_counts)))).shape)
+
+# Split the data into training and testing sets
+X_train, X_test, y_train, y_test = train_test_split(all_counts.reshape(-1, 1), np.concatenate((np.zeros(len(original_counts)), np.ones(len(adv_counts)))), test_size=0.2, random_state=42)
+
+
+# Train the logistic regression model
+
+model = LogisticRegression()
+model.fit(X_train, y_train)
+
+# Make predictions
+y_pred = model.predict(X_test)
+
+print(f"Uisng thesholds only, we get:")
+
+# Calculate accuracy, precision, and recall
+accuracy = accuracy_score(y_test, y_pred)
+precision = precision_score(y_test, y_pred)
+recall = recall_score(y_test, y_pred)
+
+print(f'Accuracy: {accuracy}')
+print(f'Precision: {precision}')
+print(f'Recall: {recall}')
+
+
+key = torch.load('keys_l2_400/target_points.pt')
+
+print(key.shape)
+
+def loss_fn(outputs, target_indices):
+    softmax = nn.Softmax(dim=-1)
+    softmax_outputs = softmax(outputs)
+    dim1, dim2 = softmax_outputs.shape
+    labels = torch.zeros(dim1, dim2)
+    labels[:, target_indices] = 1
+    if torch.isnan(softmax_outputs).any() or torch.isnan(labels).any():
+        raise ValueError("NaN values found in the tensors")
+    # return -1 * torch.norm(softmax_outputs - labels.cuda(), p=float('inf'), dim=-1)
+    return -1 * torch.norm(softmax_outputs - labels.cuda(), p=2, dim=-1)
+
+class CLIPFwd(nn.Module):
+    def __init__(self):
+        super(CLIPFwd, self).__init__()
+        self.model, _, self.preprocess = clip.create_model_and_transforms('ViT-B-32', pretrained='laion2b_s34b_b79k')
         
-        # Get base features
-        with torch.no_grad():
-            outputs = self.model(inputs)
-            image_features = outputs.pooler_output
-            image_features = normalize(image_features, dim=-1)
+    def forward(self, x):
+        return self.model.encode_image(self.preprocess(x))
 
-        # Apply randomized smoothing
-        smoothed_features = torch.zeros_like(image_features)
-        for _ in range(self.num_samples):
-            noisy_features = self._add_noise(image_features)
-            smoothed_features += noisy_features
+def calculate_losses(directory, key):
+    adv_losses = []
+    orig_losses = []
+    adv_file_count = 0
+    orig_file_count = 0
+    model = CLIPFwd()
+    model.to("cuda:0")
 
-        # Average and renormalize
-        smoothed_features = normalize(smoothed_features / self.num_samples, dim=-1)
-        
-        if return_confidence:
-            # Calculate confidence as cosine similarity between smoothed and original
-            confidence = torch.cosine_similarity(smoothed_features, image_features, dim=-1)
-            return smoothed_features, confidence.item()
-        
-        return smoothed_features
+    for subdir, _, files in os.walk(directory):
+        for file in files:
+            if 'adversarial' in file:
+                file_path = os.path.join(subdir, file)
+                inputs = Image.open(file_path)
+                inputs = pil_to_tensor(inputs).unsqueeze(0).float().to("cuda:0") / 255
+                outputs = model(inputs)
+                loss = loss_fn(outputs, key)
+                adv_losses.append(loss.item())
+                adv_file_count += 1
+            if 'original' in file:
+                file_path = os.path.join(subdir, file)
+                inputs = Image.open(file_path)
+                inputs = pil_to_tensor(inputs).unsqueeze(0).float().to("cuda:0") / 255
+                outputs = model(inputs)
+                loss = loss_fn(outputs, key)
+                orig_losses.append(loss.item())
+                orig_file_count += 1
 
-    def get_similarity(
-        self, 
-        image, 
-        text_queries: List[str],
-        return_confidence: bool = False
-    ) -> Tuple[List[float], float]:
-        """Get smoothed similarity scores between image and text queries."""
-        # Get smoothed image features
-        image_features, confidence = self.get_smooth_image_features(
-            image, 
-            return_confidence=True
-        )
+    del model
+    torch.cuda.empty_cache()
 
-        # Process text queries
-        text_inputs = self.processor(
-            text=text_queries,
-            return_tensors="pt",
-            padding=True
-        ).to(self.device)
+    return adv_losses, orig_losses, adv_file_count, orig_file_count
 
-        # Get text features
-        with torch.no_grad():
-            text_features = self.model.get_text_features(**text_inputs)
-            text_features = normalize(text_features, dim=-1)
 
-        # Calculate similarities
-        similarities = torch.cosine_similarity(
-            image_features.unsqueeze(1),
-            text_features,
-            dim=-1
-        )
+adv_losses, orig_losses, adv_file_count, orig_file_count = calculate_losses(directory, key)
+print(f'average adv_losses: {sum(adv_losses) / adv_file_count} \n average orig_losses: {sum(orig_losses) / orig_file_count} \n adv_file_count: {adv_file_count} \n orig_file_count: {orig_file_count}')  
 
-        if return_confidence:
-            return similarities.cpu().tolist(), confidence
-        
-        return similarities.cpu().tolist()
-    
-class CLIPWithLinear(nn.Module):
-    def __init__(
-        self, 
-        model_name: str = "openai/clip-vit-base-patch32",
-        linear_path: str = "linear-layers/layer_1.pth"
-    ):
-        super().__init__()
-        self.clip = CLIPVisionModel.from_pretrained(model_name)
-        self.linear = nn.Linear(768, 2)  # Assuming 512 is the CLIP embedding dimension
-        
-        # Load the linear layer weights
-        state_dict = torch.load(linear_path)
-        # Check if state dict has 'weight' and 'bias' directly or needs extraction
-        if 'linear.weight' in state_dict:
-            # Remove 'linear.' prefix from keys
-            state_dict = {k.replace('linear.', ''): v for k, v in state_dict.items()}
-        self.linear.load_state_dict(state_dict)
-    
-    def forward(self, **inputs):
-        clip_outputs = self.clip(**inputs)
-        linear_outputs = self.linear(clip_outputs.pooler_output)
-        return linear_outputs
+print(f'std adv_losses: {np.std(adv_losses)} \n std orig_losses: {np.std(orig_losses)}')
 
-class SmoothCLIPWithLinear:
-    def __init__(
-        self,
-        model_name: str = "openai/clip-vit-base-patch32",
-        linear_path: str = "linear-layers/layer_1.pth",
-        noise_level: float = 0.1,
-        num_samples: int = 100,
-        device: str = "cuda" if torch.cuda.is_available() else "cpu"
-    ):
-        self.model = CLIPWithLinear(model_name, linear_path).to(device)
-        self.processor = CLIPProcessor.from_pretrained(model_name)
-        self.noise_level = noise_level
-        self.num_samples = num_samples
-        self.device = device
-        self.model.eval()
+X_train, X_test, y_train, y_test = train_test_split(np.concatenate((np.array(adv_losses), np.array(orig_losses))).reshape(-1, 1), np.concatenate((np.ones(len(adv_losses)), np.zeros(len(orig_losses)))), test_size=0.2, random_state=42)
 
-    def _add_noise(self, features: torch.Tensor) -> torch.Tensor:
-        """Add Gaussian noise to features."""
-        noise = torch.randn_like(features) * self.noise_level
-        return features + noise
+model = LogisticRegression()
+model.fit(X_train, y_train)
 
-    def get_smooth_features(
-        self, 
-        image, 
-        return_confidence: bool = False
-    ):
-        """Get smoothed features using randomized smoothing."""
-        # Process the image
-        inputs = self.processor(images=image, return_tensors="pt")
-        inputs = inputs.to(self.device)['pixel_values']
-        
-        # Get base features
-        with torch.no_grad():
-            outputs = self.model.clip(inputs)
-            base_features = self.model.linear(outputs.pooler_output)
+y_pred = model.predict(X_test)
 
-        # Apply randomized smoothing
-        smoothed_features = torch.zeros_like(base_features)
-        for _ in range(self.num_samples):
-            # Add noise to CLIP features before linear layer
-            with torch.no_grad():
-                clip_outputs = self.model.clip(inputs)
-                noisy_features = self._add_noise(clip_outputs.pooler_output)
-                smoothed_features += self.model.linear(noisy_features)
+print(f"Using losses only, we get:")
+accuracy = accuracy_score(y_test, y_pred)
+precision = precision_score(y_test, y_pred)
+recall = recall_score(y_test, y_pred)
 
-        # Average the features
-        smoothed_features = smoothed_features / self.num_samples
-        
-        if return_confidence:
-            # Calculate confidence as cosine similarity between smoothed and original
-            confidence = F.cosine_similarity(smoothed_features, base_features, dim=-1)
-            return smoothed_features, confidence.item()
-        
-        return smoothed_features, None
+print(f'Accuracy: {accuracy}')
+print(f'Precision: {precision}')
+print(f'Recall: {recall}')
 
-    def process_image_directory(
-        self, 
-        image_dir: str = "images/"
-    ) -> Tuple[torch.Tensor, List[str]]:
-        """Process all images in a directory and return their smoothed features."""
-        image_features = []
-        image_paths = []
-        
-        for filename in os.listdir(image_dir):
-            if filename.lower().endswith(('.png', '.jpg', '.jpeg')):
-                image_path = os.path.join(image_dir, filename)
-                image = Image.open(image_path)
+
+def calculate_smooth_losses(directory, key):
+    adv_losses = []
+    orig_losses = []
+    adv_file_count = 0
+    orig_file_count = 0
+    model = CLIPFwd()
+    model.to("cuda:0")
+    model.eval()
+    num_fail = 0
+    num_smooth = 100
+
+    num = 0
+
+    with torch.no_grad():
+        for subdir, _, files in os.walk(directory):
+            for file in files:
+                # print(f"num: {num}")
+                num += 1
+                if 'adversarial' in file:
+                    file_path = os.path.join(subdir, file)
+                    image_inputs = Image.open(file_path)
+                    curr_loss = 0
+                    inputs = pil_to_tensor(image_inputs).unsqueeze(0).float().to("cuda:0") / 255
+                    noise = 0.1 * torch.randn(inputs.repeat(num_smooth, 1, 1, 1).shape).to("cuda:0")
+                    inputs = inputs.repeat(num_smooth, 1, 1, 1) + noise
+                    outputs = model(inputs)
+                    outputs = outputs.mean(dim=0).unsqueeze(0)
+                    curr_loss += loss_fn(outputs, key)
+                    del inputs, outputs, noise
+                    torch.cuda.empty_cache()
+                    adv_losses.append(curr_loss.item() / num_smooth)
+                    adv_file_count += 1
+                if 'original' in file:
+                    file_path = os.path.join(subdir, file)
+                    image_inputs = Image.open(file_path)
+                    curr_loss = 0
+                    inputs = pil_to_tensor(image_inputs).unsqueeze(0).float().to("cuda:0") / 255
+                    noise = 0.1 * torch.randn(inputs.repeat(num_smooth, 1, 1, 1).shape).to("cuda:0")
+                    inputs = inputs.repeat(num_smooth, 1, 1, 1) 
+                    outputs = model(inputs)
+                    outputs = outputs.mean(dim=0).unsqueeze(0)
+                    curr_loss += loss_fn(outputs, key)
+                    outputs = model(inputs)
+                    outputs = outputs.mean(dim=0).unsqueeze(0)
+                    curr_loss += loss_fn(outputs, key)
+                    del inputs, outputs, noise
+                    torch.cuda.empty_cache()
+                    orig_losses.append(curr_loss.item() / num_smooth)
+                    orig_file_count += 1
                 
-                # Get smoothed features
-                features, _ = self.get_smooth_features(image)
-                image_features.append(features)
-                image_paths.append(image_path)
-        
-        if image_features:
-            image_features = torch.cat(image_features, dim=0)
-            
-        return image_features, image_paths
+    return adv_losses, orig_losses, adv_file_count, orig_file_count
 
-    def detect_watermark(
-        self,
-        image_path: str,
-        keys_dir: str = "keys/",
-        confidence_threshold: float = 0.8
-    ) -> Tuple[bool, float]:
-        """
-        Detect if image contains a watermark by comparing with key files.
-        Returns (is_watermarked, confidence_score)
-        """
-        # Load and process target image
-        image = Image.open(image_path)
-        image_features, _ = self.get_smooth_features(image)
-        
-        # Process all key files
-        key_features = []
-        for key_file in os.listdir(keys_dir):
-            if key_file.lower().endswith(('.pth', '.pt')):
-                key_path = os.path.join(keys_dir, key_file)
-                key = torch.load(key_path).to(self.device)
-                key_features.append(key)
-        
-        if not key_features:
-            raise ValueError("No key files found in keys directory")
-            
-        key_features = torch.stack(key_features)
-        
-        # Calculate similarities with all keys
-        similarities = F.cosine_similarity(
-            image_features.unsqueeze(0),  # [1, dim]
-            key_features,                 # [num_keys, dim]
-            dim=1
-        )
-        
-        # Check if maximum similarity exceeds threshold
-        max_similarity = similarities.max().item()
-        is_watermarked = max_similarity >= confidence_threshold
-        
-        return is_watermarked, max_similarity
+adv_losses, orig_losses, adv_file_count, orig_file_count = calculate_smooth_losses(directory, key)
+print(f'average adv_losses: {sum(adv_losses) / adv_file_count} \n average orig_losses: {sum(orig_losses) / orig_file_count} \n adv_file_count: {adv_file_count} \n orig_file_count: {orig_file_count}')  
 
-class SmoothCLIPEmbedding:
-    def __init__(
-        self,
-        model_name: str = "openai/clip-vit-base-patch32",
-        noise_level: float = 0.1,
-        num_samples: int = 100,
-        device: str = "cuda" if torch.cuda.is_available() else "cpu"
-    ):
-        self.model = CLIPVisionModel.from_pretrained(model_name).to(device)
-        self.processor = CLIPProcessor.from_pretrained(model_name)
-        self.noise_level = noise_level
-        self.num_samples = num_samples
-        self.device = device
-        self.model.eval()
+print(f'std adv_losses: {np.std(adv_losses)} \n std orig_losses: {np.std(orig_losses)}')
 
-    def _add_noise(self, features: torch.Tensor) -> torch.Tensor:
-        """Add Gaussian noise to features."""
-        noise = torch.randn_like(features) * self.noise_level
-        return features + noise
+X_train, X_test, y_train, y_test = train_test_split(np.concatenate((np.array(adv_losses), np.array(orig_losses))).reshape(-1, 1), np.concatenate((np.ones(len(adv_losses)), np.zeros(len(orig_losses)))), test_size=0.2, random_state=42)
 
-    def get_smooth_features(
-        self, 
-        image, 
-        return_confidence: bool = False
-    ):
-        """Get smoothed CLIP embeddings using randomized smoothing."""
-        # Process the image
-        inputs = self.processor(images=image, return_tensors="pt")
-        inputs = inputs.to(self.device)['pixel_values']
-        
-        # Get base features
-        with torch.no_grad():
-            outputs = self.model(inputs)
-            base_features = outputs.pooler_output
+model = LogisticRegression()
+model.fit(X_train, y_train)
 
-        # Apply randomized smoothing
-        smoothed_features = torch.zeros_like(base_features)
-        for _ in range(self.num_samples):
-            with torch.no_grad():
-                clip_outputs = self.model(inputs)
-                noisy_features = self._add_noise(clip_outputs.pooler_output)
-                smoothed_features += noisy_features
+y_pred = model.predict(X_test)
 
-        # Average the features
-        smoothed_features = smoothed_features / self.num_samples
-        
-        if return_confidence:
-            # Calculate confidence as cosine similarity between smoothed and original
-            confidence = F.cosine_similarity(smoothed_features, base_features, dim=-1)
-            return smoothed_features, confidence.item()
-        
-        return smoothed_features, None
+print(f"Using smoothed losses only, we get:")
+accuracy = accuracy_score(y_test, y_pred)
+precision = precision_score(y_test, y_pred)
+recall = recall_score(y_test, y_pred)
 
-    def process_image_directory(
-        self, 
-        image_dir: str = "images/"
-    ) -> Tuple[torch.Tensor, List[str]]:
-        """Process all images in a directory and return their smoothed features."""
-        image_features = []
-        image_paths = []
-        
-        for filename in os.listdir(image_dir):
-            if filename.lower().endswith(('.png', '.jpg', '.jpeg')):
-                image_path = os.path.join(image_dir, filename)
-                image = Image.open(image_path)
-                
-                # Get smoothed features
-                features, _ = self.get_smooth_features(image)
-                image_features.append(features)
-                image_paths.append(image_path)
-        
-        if image_features:
-            image_features = torch.cat(image_features, dim=0)
-            
-        return image_features, image_paths
-
-    def detect_watermark(
-        self,
-        image_path: str,
-        keys_dir: str = "keys/",
-        confidence_threshold: float = 0.8
-    ) -> Tuple[bool, float]:
-        """
-        Detect if image contains a CLIP embedding watermark by comparing with key files.
-        Returns (is_watermarked, confidence_score)
-        """
-        # Load and process target image
-        image = Image.open(image_path)
-        image_features, _ = self.get_smooth_features(image)
-        
-        # Process all key files
-        key_features = []
-        for key_file in os.listdir(keys_dir):
-            if key_file.lower().endswith(('.pth', '.pt')):
-                key_path = os.path.join(keys_dir, key_file)
-                key = torch.load(key_path).to(self.device)
-                key_features.append(key)
-        
-        if not key_features:
-            raise ValueError("No key files found in keys directory")
-            
-        key_features = torch.stack(key_features)
-        
-        # Calculate similarities with all keys
-
-        similarities = F.cosine_similarity(
-            image_features.unsqueeze(0),
-            key_features,
-            dim=1
-        )
-        
-        # Check if maximum similarity exceeds threshold
-        max_similarity = similarities.max().item()
-        is_watermarked = max_similarity >= confidence_threshold
-        
-        return is_watermarked, max_similarity
-
-# Example usage
-def main(image_path):
-    # Initialize both detectors
-    projected_detector = SmoothCLIPWithLinear(
-        noise_level=0.1,
-        num_samples=100
-    )
-    
-    clip_detector = SmoothCLIPEmbedding(
-        noise_level=0.1,
-        num_samples=100
-    )
-    
-    # Detect projected watermark
-    is_watermarked_proj, confidence_proj = projected_detector.detect_watermark(
-        image_path,
-        keys_dir="keys/",
-        confidence_threshold=0.8
-    )
-    
-    # Detect CLIP embedding watermark
-    is_watermarked_clip, confidence_clip = clip_detector.detect_watermark(
-        image_path,
-        keys_dir="keys/",
-        confidence_threshold=0.8
-    )
-    
-    print(f"Image {image_path}:")
-    print(f"Projected Watermark: {is_watermarked_proj} (confidence: {confidence_proj:.4f})")
-    print(f"CLIP Watermark: {is_watermarked_clip} (confidence: {confidence_clip:.4f})")
-
-if __name__ == "__main__":
-    for image_path in os.listdir("images/"):
-        main(f"images/{image_path}")
+print(f'Accuracy: {accuracy}')
+print(f'Precision: {precision}')
+print(f'Recall: {recall}')
