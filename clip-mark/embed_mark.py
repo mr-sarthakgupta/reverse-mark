@@ -2,6 +2,8 @@ from open_clip.src import open_clip as clip
 from random import shuffle
 import torch
 from torchvision.transforms.functional import pil_to_tensor
+from torchvision import transforms
+import numpy as np
 from torch import nn
 from PIL import Image
 from transformers import CLIPProcessor, CLIPVisionModel
@@ -82,8 +84,15 @@ class CLIPAttacker(nn.Module):
             adv_image = image.clone().detach()
             adv_image = adv_image + torch.empty_like(adv_image).uniform_(-eps, eps)
             adv_image = torch.clamp(adv_image, min = 0, max = 1).detach().to("cuda:0")
-            for _ in range(1024):  
+            for _ in range(2048):  
+                transform = torch.nn.Sequential(
+                            # transforms.RandomCrop((min(224, inputs.shape[-2]), min(224, inputs.shape[-1]))),
+                            transforms.RandomCrop(np.random.randint(int(0.35*adv_image.shape[-2]), int(adv_image.shape[-2])), np.random.randint(int(0.35*adv_image.shape[-1]), int(adv_image.shape[-1]))),
+                            # transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1)
+                        )
+                transform = transform.to("cuda:0")
                 adv_image = adv_image.to("cuda:0")
+                # transformed_adv_image = transform(adv_image)
                 adv_image.requires_grad = True
                 outputs = self.model(adv_image)
                 loss = self.loss_fn(outputs, target_indices)              
@@ -147,7 +156,7 @@ if __name__ == "__main__":
     
     original_images = []
 
-    paths = paths[:400]
+    paths = paths[:100]
     for path in paths:
         temp = Image.open(f"imagenet-mini/{path}")
         original_images.append(temp.copy())
