@@ -56,7 +56,7 @@ def calculate_statistics(directory):
 
     return average_difference, average_original_count, average_adv_count, std_dev_original, std_dev_adv, original_counts, adv_counts
 
-directory = 'adv_images_l2'
+directory = 'adv_images_random_crop'
 
 average_difference, average_original_count, average_adv_count, std_dev_original, std_dev_adv, original_counts, adv_counts = calculate_statistics(directory)
 print(f'Average difference: {average_difference}')
@@ -193,63 +193,66 @@ def calculate_smooth_losses(directory, key):
     with torch.no_grad():
         for subdir, _, files in os.walk(directory):
             for file in files:
-                image_inputs = Image.open(file_path)
-                inputs = pil_to_tensor(image_inputs).unsqueeze(0).float().to("cuda:0") / 255
-                transform = torch.nn.Sequential(
-                            # transforms.RandomCrop((min(224, inputs.shape[-2]), min(224, inputs.shape[-1]))),
-                            transforms.RandomCrop((int(0.99*inputs.shape[-2]), int(0.99*inputs.shape[-1]))),
-                            # transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1)
-                        )
-                if 'adversarial' in file or 'original' in file:
-                    num += 1
-                    if 'adversarial' in file:
-                        file_path = os.path.join(subdir, file)
-                        # image_inputs = Image.open(file_path)
-                        curr_loss = 0
-                        # inputs = pil_to_tensor(image_inputs).unsqueeze(0).float().to("cuda:0") / 255
-                        transform_params = {
-                            'brightness': 0.2,
-                            'contrast': 0.2,
-                            'saturation': 0.2,
-                            'hue': 0.1
-                        }
-                        transformed_image = transforms.ToPILImage()(inputs.squeeze().cpu())
-                        transformed_image.save(os.path.join(subdir, f'transformed_{file}_brightness_{transform_params["brightness"]}_contrast_{transform_params["contrast"]}_saturation_{transform_params["saturation"]}_hue_{transform_params["hue"]}.png'))
-                        inputs = transform(inputs)
-                        noise = 0.1 * torch.randn(inputs.repeat(num_smooth, 1, 1, 1).shape).to("cuda:0")
-                        inputs = inputs.repeat(num_smooth, 1, 1, 1) + noise
-                        outputs = model(inputs)
-                        outputs = outputs.mean(dim=0).unsqueeze(0)
-                        curr_loss += loss_fn(outputs, key)
-                        del inputs, outputs, noise
-                        torch.cuda.empty_cache()    
-                        # adv_losses.append(curr_loss.item() / num_smooth)
-                        adv_losses.append(curr_loss.item())
-                        adv_file_count += 1
-                    if 'original' in file:
-                        file_path = os.path.join(subdir, file)
-                        # image_inputs = Image.open(file_path)                        
-                        curr_loss = 0
-                        # inputs = pil_to_tensor(image_inputs).unsqueeze(0).float().to("cuda:0") / 255
-                        transform_params = {
-                            'brightness': 0.2,
-                            'contrast': 0.2,
-                            'saturation': 0.2,
-                            'hue': 0.1
-                        }
-                        transformed_image = transforms.ToPILImage()(inputs.squeeze().cpu())
-                        transformed_image.save(os.path.join(subdir, f'transformed_{file}_brightness_{transform_params["brightness"]}_contrast_{transform_params["contrast"]}_saturation_{transform_params["saturation"]}_hue_{transform_params["hue"]}.png'))
-                        inputs = transform(inputs)
-                        noise = 0.1 * torch.randn(inputs.repeat(num_smooth, 1, 1, 1).shape).to("cuda:0")
-                        inputs = inputs.repeat(num_smooth, 1, 1, 1) + noise
-                        outputs = model(inputs)
-                        outputs = outputs.mean(dim=0).unsqueeze(0)
-                        curr_loss += loss_fn(outputs, key)
-                        del inputs, outputs, noise
-                        torch.cuda.empty_cache()    
-                        # orig_losses.append(curr_loss.item() / num_smooth)
-                        orig_losses.append(curr_loss.item())
-                        orig_file_count += 1
+                if 'png' in file or 'jpg' in file:
+                    print(file)
+                    file_path = os.path.join(subdir, file)
+                    image_inputs = Image.open(file_path)
+                    inputs = pil_to_tensor(image_inputs).unsqueeze(0).float().to("cuda:0") / 255
+                    transform = torch.nn.Sequential(
+                                # transforms.RandomCrop((min(224, inputs.shape[-2]), min(224, inputs.shape[-1]))),
+                                transforms.RandomCrop((int(0.99*inputs.shape[-2]), int(0.99*inputs.shape[-1]))),
+                                # transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1)
+                            )
+                    if 'adversarial' in file or 'original' in file:
+                        num += 1
+                        if 'adversarial' in file:
+                            file_path = os.path.join(subdir, file)
+                            # image_inputs = Image.open(file_path)
+                            curr_loss = 0
+                            # inputs = pil_to_tensor(image_inputs).unsqueeze(0).float().to("cuda:0") / 255
+                            transform_params = {
+                                'brightness': 0.2,
+                                'contrast': 0.2,
+                                'saturation': 0.2,
+                                'hue': 0.1
+                            }
+                            transformed_image = transforms.ToPILImage()(inputs.squeeze().cpu())
+                            transformed_image.save(os.path.join(subdir, f'transformed_{file}_brightness_{transform_params["brightness"]}_contrast_{transform_params["contrast"]}_saturation_{transform_params["saturation"]}_hue_{transform_params["hue"]}.png'))
+                            inputs = transform(inputs)
+                            noise = 0.1 * torch.randn(inputs.repeat(num_smooth, 1, 1, 1).shape).to("cuda:0")
+                            inputs = inputs.repeat(num_smooth, 1, 1, 1) + noise
+                            outputs = model(inputs)
+                            outputs = outputs.mean(dim=0).unsqueeze(0)
+                            curr_loss += loss_fn(outputs, key)
+                            del inputs, outputs, noise
+                            torch.cuda.empty_cache()    
+                            # adv_losses.append(curr_loss.item() / num_smooth)
+                            adv_losses.append(curr_loss.item())
+                            adv_file_count += 1
+                        if 'original' in file:
+                            file_path = os.path.join(subdir, file)
+                            # image_inputs = Image.open(file_path)                        
+                            curr_loss = 0
+                            # inputs = pil_to_tensor(image_inputs).unsqueeze(0).float().to("cuda:0") / 255
+                            transform_params = {
+                                'brightness': 0.2,
+                                'contrast': 0.2,
+                                'saturation': 0.2,
+                                'hue': 0.1
+                            }
+                            transformed_image = transforms.ToPILImage()(inputs.squeeze().cpu())
+                            transformed_image.save(os.path.join(subdir, f'transformed_{file}_brightness_{transform_params["brightness"]}_contrast_{transform_params["contrast"]}_saturation_{transform_params["saturation"]}_hue_{transform_params["hue"]}.png'))
+                            inputs = transform(inputs)
+                            noise = 0.1 * torch.randn(inputs.repeat(num_smooth, 1, 1, 1).shape).to("cuda:0")
+                            inputs = inputs.repeat(num_smooth, 1, 1, 1) + noise
+                            outputs = model(inputs)
+                            outputs = outputs.mean(dim=0).unsqueeze(0)
+                            curr_loss += loss_fn(outputs, key)
+                            del inputs, outputs, noise
+                            torch.cuda.empty_cache()    
+                            # orig_losses.append(curr_loss.item() / num_smooth)
+                            orig_losses.append(curr_loss.item())
+                            orig_file_count += 1
                 
     return adv_losses, orig_losses, adv_file_count, orig_file_count
 

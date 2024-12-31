@@ -151,7 +151,7 @@ if __name__ == "__main__":
     torch.save(target_indices, 'keys/target_points.pt')
 
     clip_attacker = CLIPAttacker(
-        save_dir="adv_images_linf"
+        save_dir="adv_images_random_crop"
     )
     
     original_images = []
