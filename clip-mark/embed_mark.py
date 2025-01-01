@@ -82,13 +82,13 @@ class CLIPAttacker(nn.Module):
             
             # image = self.processor(images=image, return_tensors="pt", do_rescale = False)['pixel_values']
             adv_images = image.clone().detach()
-            adv_images = adv_image.to("cuda:0")
+            adv_images = adv_images.to("cuda:0")
             adv_images.requires_grad = True
 
             all_transforms = []
             for _ in range(16):  
                 transform = torch.nn.Sequential(
-                            transforms.RandomResizedCrop(size = (adv_image.shape[-2], adv_image.shape[-1]), scale = (0.25, 1), ratio = (0.99, 1)),
+                            transforms.RandomResizedCrop(size = (adv_images.shape[-2], adv_images.shape[-1]), scale = (0.25, 1), ratio = (0.99, 1)),
                         )
                 all_transforms.append(transform.to("cuda:0"))
             
@@ -96,21 +96,20 @@ class CLIPAttacker(nn.Module):
             adv_images = torch.clamp(adv_images, min = 0, max = 1).detach().to("cuda:0")
 
             for _ in range(512):
-                adv_images = adv_images[0].unsqueeze(0).detach()
                 adv_images.requires_grad = True
                 for transform in all_transforms:
                     adv_images = torch.cat((adv_images, transform(adv_images[0].unsqueeze(0))), dim=0)
                 outputs = self.model(adv_images)
                 loss = self.loss_fn(outputs, target_indices).sum()
                 # Backward pass
-                grad = torch.autograd.grad(loss, adv_images[0], retain_graph=False)[0]
-                adv_images[0] = adv_images[0].detach() + alpha * torch.sign(grad)
+                grad = torch.autograd.grad(loss, adv_images, retain_graph=False)[0]
+                adv_images = adv_images.detach() + alpha * torch.sign(grad)
                 delta = torch.clamp(adv_images[0].cuda() - image.cuda(), min=-eps, max=eps)
-                adv_images[0] = torch.clamp(image.cuda() + delta.cuda(), min=0, max=1).detach()
+                adv_images = torch.clamp(image.cuda() + delta.cuda(), min=0, max=1).detach()
 
                 
             with torch.no_grad():
-                adv_out_maxes = torch.topk(self.model(adv_image), dim=-1, k = 100).indices
+                adv_out_maxes = torch.topk(self.model(adv_images), dim=-1, k = 100).indices
             
             # Count the number of target indices in both the original and adversarial outputs
             og_count = sum([1 for idx in target_indices if idx in og_out_maxes])
@@ -127,7 +126,7 @@ class CLIPAttacker(nn.Module):
             
             # Save adversarial image
             adv_image_path = os.path.join(image_dir, f"{image_name}_adversarial.png")
-            self.to_pil(adv_image.squeeze(0).cpu()).save(adv_image_path)
+            self.to_pil(adv_images.squeeze(0).cpu()).save(adv_image_path)
             
             # Save counts to JSON file
             counts = {
