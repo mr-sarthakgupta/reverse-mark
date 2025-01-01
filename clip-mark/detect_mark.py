@@ -56,7 +56,7 @@ def calculate_statistics(directory):
 
     return average_difference, average_original_count, average_adv_count, std_dev_original, std_dev_adv, original_counts, adv_counts
 
-directory = 'adv_images_random_crop'
+directory = 'adv_images_l2'
 
 average_difference, average_original_count, average_adv_count, std_dev_original, std_dev_adv, original_counts, adv_counts = calculate_statistics(directory)
 print(f'Average difference: {average_difference}')
@@ -64,6 +64,8 @@ print(f'Average original count: {average_original_count}')
 print(f'Average adversarial count: {average_adv_count}')
 print(f'Standard deviation of original count: {std_dev_original}')
 print(f'Standard deviation of adversarial count: {std_dev_adv}')
+
+print(len(original_counts), len(adv_counts))
 
 original_counts = np.array(original_counts)
 adv_counts = np.array(adv_counts)
@@ -207,17 +209,7 @@ def calculate_smooth_losses(directory, key):
                         num += 1
                         if 'adversarial' in file:
                             file_path = os.path.join(subdir, file)
-                            # image_inputs = Image.open(file_path)
                             curr_loss = 0
-                            # inputs = pil_to_tensor(image_inputs).unsqueeze(0).float().to("cuda:0") / 255
-                            transform_params = {
-                                'brightness': 0.2,
-                                'contrast': 0.2,
-                                'saturation': 0.2,
-                                'hue': 0.1
-                            }
-                            transformed_image = transforms.ToPILImage()(inputs.squeeze().cpu())
-                            transformed_image.save(os.path.join(subdir, f'transformed_{file}_brightness_{transform_params["brightness"]}_contrast_{transform_params["contrast"]}_saturation_{transform_params["saturation"]}_hue_{transform_params["hue"]}.png'))
                             inputs = transform(inputs)
                             noise = 0.1 * torch.randn(inputs.repeat(num_smooth, 1, 1, 1).shape).to("cuda:0")
                             inputs = inputs.repeat(num_smooth, 1, 1, 1) + noise
@@ -230,18 +222,8 @@ def calculate_smooth_losses(directory, key):
                             adv_losses.append(curr_loss.item())
                             adv_file_count += 1
                         if 'original' in file:
-                            file_path = os.path.join(subdir, file)
-                            # image_inputs = Image.open(file_path)                        
+                            file_path = os.path.join(subdir, file)                        
                             curr_loss = 0
-                            # inputs = pil_to_tensor(image_inputs).unsqueeze(0).float().to("cuda:0") / 255
-                            transform_params = {
-                                'brightness': 0.2,
-                                'contrast': 0.2,
-                                'saturation': 0.2,
-                                'hue': 0.1
-                            }
-                            transformed_image = transforms.ToPILImage()(inputs.squeeze().cpu())
-                            transformed_image.save(os.path.join(subdir, f'transformed_{file}_brightness_{transform_params["brightness"]}_contrast_{transform_params["contrast"]}_saturation_{transform_params["saturation"]}_hue_{transform_params["hue"]}.png'))
                             inputs = transform(inputs)
                             noise = 0.1 * torch.randn(inputs.repeat(num_smooth, 1, 1, 1).shape).to("cuda:0")
                             inputs = inputs.repeat(num_smooth, 1, 1, 1) + noise

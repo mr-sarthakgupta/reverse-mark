@@ -81,30 +81,36 @@ class CLIPAttacker(nn.Module):
                 og_out_maxes = torch.topk(self.model(image), dim=-1, k = 100).indices
             
             # image = self.processor(images=image, return_tensors="pt", do_rescale = False)['pixel_values']
-            adv_image = image.clone().detach()
-            adv_image = adv_image + torch.empty_like(adv_image).uniform_(-eps, eps)
-            adv_image = torch.clamp(adv_image, min = 0, max = 1).detach().to("cuda:0")
-            for _ in range(8192):  
+            adv_images = image.clone().detach()
+            adv_images = adv_image.to("cuda:0")
+            adv_images.requires_grad = True
+
+            all_transforms = []
+            for _ in range(16):  
                 transform = torch.nn.Sequential(
-                            # transforms.RandomCrop((min(224, inputs.shape[-2]), min(224, inputs.shape[-1]))),
-                            transforms.RandomCrop(np.random.randint(int(0.35*adv_image.shape[-2]), int(adv_image.shape[-2])), np.random.randint(int(0.35*adv_image.shape[-1]), int(adv_image.shape[-1]))),
-                            # transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1)
+                            transforms.RandomResizedCrop(size = (adv_image.shape[-2], adv_image.shape[-1]), scale = (0.25, 1), ratio = (0.99, 1)),
                         )
-                transform = transform.to("cuda:0")
-                adv_image = adv_image.to("cuda:0")
-                adv_image.requires_grad = True
-                transformed_adv_image = transform(adv_image)
-                outputs = self.model(transformed_adv_image)
-                loss = self.loss_fn(outputs, target_indices)              
+                all_transforms.append(transform.to("cuda:0"))
+            
+            adv_images = adv_images + torch.empty_like(adv_images).uniform_(-eps, eps)
+            adv_images = torch.clamp(adv_images, min = 0, max = 1).detach().to("cuda:0")
+
+            for _ in range(512):
+                adv_images = adv_images[0].unsqueeze(0).detach()
+                adv_images.requires_grad = True
+                for transform in all_transforms:
+                    adv_images = torch.cat((adv_images, transform(adv_images[0].unsqueeze(0))), dim=0)
+                outputs = self.model(adv_images)
+                loss = self.loss_fn(outputs, target_indices).sum()
                 # Backward pass
-                grad = torch.autograd.grad(loss, adv_image, retain_graph=False)[0]
-                adv_image = adv_image.detach() + alpha * torch.sign(grad)
-                delta = torch.clamp(adv_image.cuda() - image.cuda(), min=-eps, max=eps)
-                adv_image = torch.clamp(image.cuda() + delta.cuda(), min=0, max=1).detach()
-        
+                grad = torch.autograd.grad(loss, adv_images[0], retain_graph=False)[0]
+                adv_images[0] = adv_images[0].detach() + alpha * torch.sign(grad)
+                delta = torch.clamp(adv_images[0].cuda() - image.cuda(), min=-eps, max=eps)
+                adv_images[0] = torch.clamp(image.cuda() + delta.cuda(), min=0, max=1).detach()
+
+                
             with torch.no_grad():
                 adv_out_maxes = torch.topk(self.model(adv_image), dim=-1, k = 100).indices
-            
             
             # Count the number of target indices in both the original and adversarial outputs
             og_count = sum([1 for idx in target_indices if idx in og_out_maxes])
