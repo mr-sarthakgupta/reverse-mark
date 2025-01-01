@@ -84,7 +84,7 @@ class CLIPAttacker(nn.Module):
             adv_image = image.clone().detach()
             adv_image = adv_image + torch.empty_like(adv_image).uniform_(-eps, eps)
             adv_image = torch.clamp(adv_image, min = 0, max = 1).detach().to("cuda:0")
-            for _ in range(2048):  
+            for _ in range(8192):  
                 transform = torch.nn.Sequential(
                             # transforms.RandomCrop((min(224, inputs.shape[-2]), min(224, inputs.shape[-1]))),
                             transforms.RandomCrop(np.random.randint(int(0.35*adv_image.shape[-2]), int(adv_image.shape[-2])), np.random.randint(int(0.35*adv_image.shape[-1]), int(adv_image.shape[-1]))),
@@ -92,9 +92,9 @@ class CLIPAttacker(nn.Module):
                         )
                 transform = transform.to("cuda:0")
                 adv_image = adv_image.to("cuda:0")
-                # transformed_adv_image = transform(adv_image)
                 adv_image.requires_grad = True
-                outputs = self.model(adv_image)
+                transformed_adv_image = transform(adv_image)
+                outputs = self.model(transformed_adv_image)
                 loss = self.loss_fn(outputs, target_indices)              
                 # Backward pass
                 grad = torch.autograd.grad(loss, adv_image, retain_graph=False)[0]
