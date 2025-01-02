@@ -86,7 +86,7 @@ class CLIPAttacker(nn.Module):
             adv_images.requires_grad = True
 
             all_transforms = []
-            for _ in range(16):  
+            for _ in range(31):  
                 transform = torch.nn.Sequential(
                             transforms.RandomResizedCrop(size = (adv_images.shape[-2], adv_images.shape[-1]), scale = (0.25, 1), ratio = (0.99, 1)),
                         )
@@ -94,8 +94,8 @@ class CLIPAttacker(nn.Module):
             
             adv_images = adv_images + torch.empty_like(adv_images).uniform_(-eps, eps)
             adv_images = torch.clamp(adv_images, min = 0, max = 1).detach().to("cuda:0")
-
-            for _ in range(512):
+                                                                                        
+            for _ in range(1024):
                 adv_images.requires_grad = True
                 for transform in all_transforms:
                     adv_images = torch.cat((adv_images, transform(adv_images[0].unsqueeze(0))), dim=0)
@@ -139,7 +139,7 @@ class CLIPAttacker(nn.Module):
                 json.dump(counts, json_file)
             save_dirs.append(image_dir)
         print(f"Failed for {num_fail} samples")
-        return adv_image, save_dirs
+        return adv_images, save_dirs
 
 # Updated main block to demonstrate both attackers
 if __name__ == "__main__":
