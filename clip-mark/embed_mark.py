@@ -128,7 +128,7 @@ class CLIPAttacker(nn.Module):
             adv_count_sum = 0
 
             with torch.no_grad():
-                for adv_img, og_img in zip(all_adv_images, all_og_images):
+                for adv_img, ogd_img in zip(all_adv_images, all_og_images):
                     og_out_maxes = torch.topk(self.model(og_img.unsqueeze(0)), dim=-1, k = 100).indices
                     og_count = sum([1 for idx in target_indices if idx in og_out_maxes])
                     og_count_sum += og_count
