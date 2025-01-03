@@ -61,7 +61,7 @@ class CLIPAttacker(nn.Module):
     def attack_and_save(self, images, target_indices, original_filenames=None):
         self.model.to("cuda:0")
         eps = 32/255
-        alpha = 2/255
+        alpha = 8/255
 
         for parameter in self.model.parameters():
             parameter.requires_grad = True
@@ -86,7 +86,7 @@ class CLIPAttacker(nn.Module):
             adv_images.requires_grad = True
 
             all_transforms = []
-            for _ in range(31):  
+            for _ in range(128):  
                 transform = torch.nn.Sequential(
                             transforms.RandomResizedCrop(size = (adv_images.shape[-2], adv_images.shape[-1]), scale = (0.25, 1), ratio = (0.99, 1)),
                         )
@@ -108,12 +108,71 @@ class CLIPAttacker(nn.Module):
                 adv_images = torch.clamp(image.cuda() + delta.cuda(), min=0, max=1).detach()
 
                 
+            all_adv_images = adv_images.detach().to("cuda:0")
+            all_adv_images.requires_grad = False
+            all_og_images = image.detach().to("cuda:0")
+
             with torch.no_grad():
-                adv_out_maxes = torch.topk(self.model(adv_images), dim=-1, k = 100).indices
+                og_outs = self.model(all_og_images)
+                adv_outs = self.model(all_adv_images)
+            og_count_single = sum([1 for idx in target_indices if idx in torch.topk(og_outs, dim=-1, k = 100).indices])
+            adv_count_single = sum([1 for idx in target_indices if idx in torch.topk(adv_outs, dim=-1, k = 100).indices])
+
+            print(f'with the single image: {i} | og count: {og_count_single} | adv count: {adv_count_single}')
+
+            for transform in all_transforms:
+                all_og_images = torch.cat((all_og_images, transform(image[0].unsqueeze(0))), dim=0)
+                all_adv_images = torch.cat((all_adv_images, transform(adv_images[0].unsqueeze(0))), dim=0)
+
+            og_count_sum = 0
+            adv_count_sum = 0
+
+            with torch.no_grad():
+                for adv_img, og_img in zip(all_adv_images, all_og_images):
+                    og_out_maxes = torch.topk(self.model(og_img.unsqueeze(0)), dim=-1, k = 100).indices
+                    og_count = sum([1 for idx in target_indices if idx in og_out_maxes])
+                    og_count_sum += og_count
+                    adv_out_maxes = torch.topk(self.model(adv_img.unsqueeze(0)), dim=-1, k = 100).indices
+                    adv_count = sum([1 for idx in target_indices if idx in adv_out_maxes])
+                    adv_count_sum += adv_count
             
             # Count the number of target indices in both the original and adversarial outputs
-            og_count = sum([1 for idx in target_indices if idx in og_out_maxes])
-            adv_count = sum([1 for idx in target_indices if idx in adv_out_maxes])
+            og_count = og_count_sum / len(all_og_images)
+            adv_count = adv_count_sum / len(all_adv_images)
+
+            print(f'with the og transforms: {i} | og count: {og_count} | adv count: {adv_count}')
+
+            all_transforms = []
+            for _ in range(128):  
+                transform = torch.nn.Sequential(
+                            transforms.RandomResizedCrop(size = (adv_images.shape[-2], adv_images.shape[-1]), scale = (0.25, 1), ratio = (0.99, 1)),
+                        )
+                all_transforms.append(transform.to("cuda:0"))
+            
+
+            for transform in all_transforms:
+                all_og_images = torch.cat((all_og_images, transform(image[0].unsqueeze(0))), dim=0)
+                all_adv_images = torch.cat((all_adv_images, transform(adv_images[0].unsqueeze(0))), dim=0)
+
+            og_count_sum = 0
+            adv_count_sum = 0
+
+            with torch.no_grad():
+                for adv_img, og_img in zip(all_adv_images, all_og_images):
+                    og_out_maxes = torch.topk(self.model(og_img.unsqueeze(0)), dim=-1, k = 100).indices
+                    og_count = sum([1 for idx in target_indices if idx in og_out_maxes])
+                    og_count_sum += og_count
+                    adv_out_maxes = torch.topk(self.model(adv_img.unsqueeze(0)), dim=-1, k = 100).indices
+                    adv_count = sum([1 for idx in target_indices if idx in adv_out_maxes])
+                    adv_count_sum += adv_count
+            
+            # Count the number of target indices in both the original and adversarial outputs
+            og_count = og_count_sum / len(all_og_images)
+            adv_count = adv_count_sum / len(all_adv_images)
+
+            print(f'with the new transforms: {i} | og count: {og_count} | adv count: {adv_count}')
+
+            
             
             # Create subdirectory for each image
             image_name = original_filenames[i] if original_filenames else f"image_{i}"
@@ -133,7 +192,7 @@ class CLIPAttacker(nn.Module):
                 "original_count": og_count,
                 "adversarial_count": adv_count
             }
-            print(i, f"Original count: {og_count}, Adversarial count: {adv_count}")
+            # print(i, f"Original count: {og_count}, Adversarial count: {adv_count}")
             json_path = os.path.join(image_dir, f"{image_name}_counts.json")
             with open(json_path, 'w') as json_file:
                 json.dump(counts, json_file)

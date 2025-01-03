@@ -56,7 +56,7 @@ def calculate_statistics(directory):
 
     return average_difference, average_original_count, average_adv_count, std_dev_original, std_dev_adv, original_counts, adv_counts
 
-directory = 'adv_images_l2'
+directory = 'adv_images_random_crop'
 
 average_difference, average_original_count, average_adv_count, std_dev_original, std_dev_adv, original_counts, adv_counts = calculate_statistics(directory)
 print(f'Average difference: {average_difference}')
@@ -100,7 +100,7 @@ print(f'Precision: {precision}')
 print(f'Recall: {recall}')
 
 
-key = torch.load('keys_l2_400/target_points.pt')
+key = torch.load('keys_crop/target_points.pt')
 
 print(key.shape)
 
@@ -137,7 +137,12 @@ def calculate_losses(directory, key):
                 file_path = os.path.join(subdir, file)
                 inputs = Image.open(file_path)
                 inputs = pil_to_tensor(inputs).unsqueeze(0).float().to("cuda:0") / 255
-                outputs = model(inputs)
+                transform = torch.nn.Sequential(
+                        # transforms.RandomCrop((min(224, inputs.shape[-2]), min(224, inputs.shape[-1]))),
+                        transforms.RandomCrop((int(0.99*inputs.shape[-2]), int(0.99*inputs.shape[-1]))),
+                        # transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1)
+                    )
+                outputs = model(transform(inputs))
                 loss = loss_fn(outputs, key)
                 adv_losses.append(loss.item())
                 adv_file_count += 1
@@ -145,7 +150,12 @@ def calculate_losses(directory, key):
                 file_path = os.path.join(subdir, file)
                 inputs = Image.open(file_path)
                 inputs = pil_to_tensor(inputs).unsqueeze(0).float().to("cuda:0") / 255
-                outputs = model(inputs)
+                transform = torch.nn.Sequential(
+                        # transforms.RandomCrop((min(224, inputs.shape[-2]), min(224, inputs.shape[-1]))),
+                        transforms.RandomCrop((int(0.99*inputs.shape[-2]), int(0.99*inputs.shape[-1]))),
+                        # transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1)
+                    )
+                outputs = model(transform(inputs))
                 loss = loss_fn(outputs, key)
                 orig_losses.append(loss.item())
                 orig_file_count += 1
@@ -196,7 +206,6 @@ def calculate_smooth_losses(directory, key):
         for subdir, _, files in os.walk(directory):
             for file in files:
                 if 'png' in file or 'jpg' in file:
-                    print(file)
                     file_path = os.path.join(subdir, file)
                     image_inputs = Image.open(file_path)
                     inputs = pil_to_tensor(image_inputs).unsqueeze(0).float().to("cuda:0") / 255
